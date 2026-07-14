@@ -30,7 +30,7 @@ describe("oauth-handler token compatibility", () => {
     const { saveAuthEntry } = await import("../mcp-auth.ts");
     const { getStoredTokens } = await import("../oauth-handler.ts");
 
-    saveAuthEntry("demo", {
+    await saveAuthEntry("demo", {
       tokens: {
         accessToken: "abc",
         refreshToken: "refresh",

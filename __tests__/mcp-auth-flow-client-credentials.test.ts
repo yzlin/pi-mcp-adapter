@@ -614,9 +614,9 @@ describe("mcp-auth-flow explicit auth", () => {
     const { authenticate } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateCodeVerifier, updateOAuthState } = await import("../mcp-auth.ts");
 
-    updateClientInfo("stale-client-credentials", { clientId: "stale-client" }, "https://api.example.com/mcp");
-    updateCodeVerifier("stale-client-credentials", "stale-verifier");
-    updateOAuthState("stale-client-credentials", "stale-state");
+    await updateClientInfo("stale-client-credentials", { clientId: "stale-client" }, "https://api.example.com/mcp");
+    await updateCodeVerifier("stale-client-credentials", "stale-verifier");
+    await updateOAuthState("stale-client-credentials", "stale-state");
 
     const status = await authenticate("stale-client-credentials", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",
@@ -700,8 +700,8 @@ describe("mcp-auth-flow explicit auth", () => {
     const { authenticate } = await import("../mcp-auth-flow.ts");
     const { getOAuthState, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("expired", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
-    updateTokens("expired", {
+    await updateClientInfo("expired", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
+    await updateTokens("expired", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,
@@ -742,8 +742,8 @@ describe("mcp-auth-flow explicit auth", () => {
     const { updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
     const runtime = createOAuthRuntime();
 
-    updateClientInfo("refresh", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
-    updateTokens("refresh", {
+    await updateClientInfo("refresh", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
+    await updateTokens("refresh", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,
@@ -825,8 +825,8 @@ describe("mcp-auth-flow explicit auth", () => {
     const { getValidToken } = await import("../mcp-auth-flow.ts");
     const { updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("refresh-skip-issuer", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
-    updateTokens("refresh-skip-issuer", {
+    await updateClientInfo("refresh-skip-issuer", { clientId: "client", redirectUris: ["http://localhost:19876/callback"] }, "https://api.example.com/mcp");
+    await updateTokens("refresh-skip-issuer", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,
@@ -854,9 +854,9 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, getOAuthState, updateClientInfo, updateCodeVerifier, updateOAuthState } = await import("../mcp-auth.ts");
 
-    updateClientInfo("stale", { clientId: "stale-client" }, "https://api.example.com/mcp");
-    updateCodeVerifier("stale", "old-verifier");
-    updateOAuthState("stale", "old-state");
+    await updateClientInfo("stale", { clientId: "stale-client" }, "https://api.example.com/mcp");
+    await updateCodeVerifier("stale", "old-verifier");
+    await updateOAuthState("stale", "old-state");
 
     const result = await startAuth("stale", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",
@@ -989,12 +989,12 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("tokened", {
+    await updateClientInfo("tokened", {
       clientId: "stored-client",
       clientSecret: "stored-secret",
       redirectUris: ["http://localhost:19876/callback"],
     }, "https://api.example.com/mcp");
-    updateTokens("tokened", { accessToken: "access", refreshToken: "refresh" }, "https://api.example.com/mcp");
+    await updateTokens("tokened", { accessToken: "access", refreshToken: "refresh" }, "https://api.example.com/mcp");
 
     await startAuth("tokened", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",
@@ -1008,9 +1008,9 @@ describe("mcp-auth-flow explicit auth", () => {
     const { getValidToken } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("url-change", { clientId: "old-client" }, "https://old.example.com/mcp");
-    updateTokens("url-change", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://old.example.com/mcp");
-    updateClientInfo("url-change", { clientId: "new-client" }, "https://new.example.com/mcp");
+    await updateClientInfo("url-change", { clientId: "old-client" }, "https://old.example.com/mcp");
+    await updateTokens("url-change", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://old.example.com/mcp");
+    await updateClientInfo("url-change", { clientId: "new-client" }, "https://new.example.com/mcp");
 
     await expect(getValidToken("url-change", "https://new.example.com/mcp")).resolves.toBeNull();
     expect(getAuthForUrl("url-change", "https://old.example.com/mcp")).toBeUndefined();
@@ -1032,14 +1032,14 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateCodeVerifier, updateOAuthState, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("stale-redirect", {
+    await updateClientInfo("stale-redirect", {
       clientId: "stale-client",
       clientSecret: "stale-secret",
       redirectUris: ["http://localhost:19876/callback"],
     }, "https://api.example.com/mcp");
-    updateTokens("stale-redirect", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://api.example.com/mcp");
-    updateCodeVerifier("stale-redirect", "old-verifier");
-    updateOAuthState("stale-redirect", "old-state");
+    await updateTokens("stale-redirect", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://api.example.com/mcp");
+    await updateCodeVerifier("stale-redirect", "old-verifier");
+    await updateOAuthState("stale-redirect", "old-state");
 
     const result = await startAuth("stale-redirect", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",
@@ -1079,11 +1079,11 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("missing-redirect-metadata", {
+    await updateClientInfo("missing-redirect-metadata", {
       clientId: "legacy-client",
       clientSecret: "legacy-secret",
     }, "https://api.example.com/mcp");
-    updateTokens("missing-redirect-metadata", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://api.example.com/mcp");
+    await updateTokens("missing-redirect-metadata", { accessToken: "old-access", refreshToken: "old-refresh" }, "https://api.example.com/mcp");
 
     const result = await startAuth("missing-redirect-metadata", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",
@@ -1112,7 +1112,7 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, saveAuthEntry } = await import("../mcp-auth.ts");
 
-    saveAuthEntry("malformed-redirect-metadata", {
+    await saveAuthEntry("malformed-redirect-metadata", {
       clientInfo: {
         clientId: "legacy-client",
         clientSecret: "legacy-secret",
@@ -1147,12 +1147,12 @@ describe("mcp-auth-flow explicit auth", () => {
     const { getValidToken } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
 
-    updateClientInfo("refresh-stale-redirect", {
+    await updateClientInfo("refresh-stale-redirect", {
       clientId: "refresh-client",
       clientSecret: "refresh-secret",
       redirectUris: ["http://localhost:19876/callback"],
     }, "https://api.example.com/mcp");
-    updateTokens("refresh-stale-redirect", {
+    await updateTokens("refresh-stale-redirect", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,
@@ -1174,7 +1174,7 @@ describe("mcp-auth-flow explicit auth", () => {
     const { startAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo } = await import("../mcp-auth.ts");
 
-    updateClientInfo("registered", { clientId: "stored-dynamic-client" }, "https://api.example.com/mcp");
+    await updateClientInfo("registered", { clientId: "stored-dynamic-client" }, "https://api.example.com/mcp");
 
     await startAuth("registered", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",

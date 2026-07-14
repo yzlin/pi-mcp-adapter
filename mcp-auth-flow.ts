@@ -30,8 +30,12 @@ import {
 import {
   getAuthForUrl,
   getAuthEntry,
+  migrateLegacyAuthEntry,
+  isTokenExpired,
+  hasStoredTokens,
   clearAllCredentials,
   clearClientInfo,
+  clearTokens,
   clearCodeVerifier,
   getOAuthState,
   clearOAuthState,
@@ -49,6 +53,10 @@ import { createOAuthFetch, oauthHeaderResolver, resolveOAuthHeaders } from "./mc
 import { isBuiltInAgentPlugin } from "./agent-plugin-provenance.ts"
 import { abortable, throwIfAborted } from "./abort.ts"
 import { combineAbortSignals, isAbortError } from "./runtime-owner.ts"
+
+function hasOAuthAuthority(authority: OAuthAuthority): boolean {
+  try { authority(); return true } catch { return false }
+}
 
 /** Auth status for a server */
 export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
@@ -157,15 +165,6 @@ function getAuthStorageIdentity(options: AuthStorageOptions): ["encrypted-file"]
 
 function getPendingAuthKey(serverName: string, options: AuthStorageOptions): string {
   return JSON.stringify([serverName, ...getAuthStorageIdentity(options)])
-}
-
-function hasOAuthAuthority(authority: OAuthAuthority): boolean {
-  try {
-    authority()
-    return true
-  } catch {
-    return false
-  }
 }
 
 export function hasPendingAuth(serverName: string, options?: AuthStorageOptions, runtime?: McpOAuthRuntime): boolean {
@@ -475,14 +474,16 @@ export async function startAuth(
   const explainRejection = (error: unknown): never => {
     throw error instanceof RegistrationRejectedError ? explainRegistrationRejection(error, serverUrl) : error
   }
+  await migrateLegacyAuthEntry(serverName, authStorageOptions)
+  throwIfAborted(signal)
 
   if (config.grantType === "client_credentials") {
     const storedAuth = await getAuthForUrl(serverName, serverUrl, authStorageOptions)
     authority()
     if (storedAuth?.clientInfo && !storedAuth.tokens && !config.clientId) {
-      clearClientInfo(serverName, authStorageOptions)
-      clearCodeVerifier(serverName, authStorageOptions)
-      clearOAuthState(serverName, authStorageOptions)
+      await clearClientInfo(serverName, authStorageOptions)
+      await clearCodeVerifier(serverName, authStorageOptions)
+      await clearOAuthState(serverName, authStorageOptions)
     }
 
     authority()
@@ -497,7 +498,7 @@ export async function startAuth(
       const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
       authority()
       throwIfAborted(signal)
-      const result = await abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn }).catch(explainRejection), signal)
+      const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() }).catch(explainRejection), signal))
       authority()
       throwIfAborted(signal)
       if (result !== "AUTHORIZED") {
@@ -566,19 +567,16 @@ export async function startAuth(
     authority()
     if (storedAuth?.clientInfo && !config.clientId) {
       if (!storedAuth.tokens) {
-        clearClientInfo(serverName, authStorageOptions)
-        clearCodeVerifier(serverName, authStorageOptions)
-        clearOAuthState(serverName, authStorageOptions)
+        await clearClientInfo(serverName, authStorageOptions)
+        await clearCodeVerifier(serverName, authStorageOptions)
+        await clearOAuthState(serverName, authStorageOptions)
       } else {
         const redirectUris = storedAuth.clientInfo.redirectUris
-        const redirectUriMatches = Array.isArray(redirectUris)
-          && redirectUris.includes(authProvider.redirectUrl ?? "")
-        if (!redirectUriMatches && !storedAuth.tokens.refreshToken) {
-          // A stale redirect URI only blocks the interactive leg; refresh does
-          // not send redirect_uri, so keep refresh-capable credentials intact.
-          clearClientInfo(serverName, authStorageOptions)
-          clearCodeVerifier(serverName, authStorageOptions)
-          clearOAuthState(serverName, authStorageOptions)
+        if (!Array.isArray(redirectUris) || !redirectUris.includes(authProvider.redirectUrl ?? "")) {
+          await clearClientInfo(serverName, authStorageOptions)
+          await clearTokens(serverName, authStorageOptions)
+          await clearCodeVerifier(serverName, authStorageOptions)
+          await clearOAuthState(serverName, authStorageOptions)
         }
       }
     }
@@ -591,7 +589,7 @@ export async function startAuth(
     const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
     authority()
     throwIfAborted(signal)
-    const result = await abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn }).catch(explainRejection), signal)
+    const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() }).catch(explainRejection), signal))
     authority()
     throwIfAborted(signal)
     if (result === "AUTHORIZED") {
@@ -953,14 +951,13 @@ export async function completeAuth(
       throw new Error(`The OAuth authorization response issuer does not match the discovered issuer for ${serverName}.`)
     }
 
-    const result = await abortable(runSdkAuth(pendingAuth.authProvider, {
+    const result = await pendingAuth.authProvider.withSdkAuth(() => abortable(runSdkAuth(pendingAuth.authProvider, {
       serverUrl: pendingAuth.serverUrl,
       authorizationCode: code,
       ...(iss !== undefined ? { iss } : {}),
       ...pendingAuth.discovery,
-      fetchFn,
-    }), signal)
-    pendingAuth.authority()
+      fetchFn: pendingAuth.authProvider.createAuthFetchFn(),
+    }), signal))
     throwIfAborted(signal)
     if (result !== "AUTHORIZED") {
       throw new UnauthorizedError("Failed to authorize")
@@ -1138,6 +1135,9 @@ export async function getValidToken(
   const authStorageOptions = options.authStorageOptions ?? {}
   const signal = combineAbortSignals(runtime.signal, options.signal)
   throwIfAborted(signal)
+  await migrateLegacyAuthEntry(serverName, authStorageOptions)
+  throwIfAborted(signal)
+  // Check if we have valid tokens
   const entry = await getAuthForUrl(serverName, serverUrl, authStorageOptions)
   if (!hasOAuthAuthority(authority)) return null
   throwIfAborted(signal)
@@ -1177,13 +1177,12 @@ export async function getValidToken(
         const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, options.definition, signal), config)
         authority()
         throwIfAborted(signal)
-        const result = await abortable(runSdkAuth(authProvider, {
+        const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, {
           serverUrl,
           ...discovery,
+          fetchFn: authProvider.createAuthFetchFn(),
           ...(options.skipIssuerMetadataValidation === true ? { skipIssuerMetadataValidation: true } : {}),
-          fetchFn,
-        }), signal)
-        authority()
+        }), signal))
         throwIfAborted(signal)
         if (result !== "AUTHORIZED") {
           return null
@@ -1237,7 +1236,7 @@ export async function removeAuth(serverName: string, options: AuthenticateOption
     if (storedOAuthState) cancelPendingCallback(storedOAuthState)
     await stopCallbackServerIfIdle()
     throwIfAborted(signal)
-    clearAllCredentials(serverName, authStorageOptions)
+    await clearAllCredentials(serverName, authStorageOptions)
     console.log(`MCP Auth: Removed credentials for ${serverName}`)
   } finally {
     releaseRevocation()
