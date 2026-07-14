@@ -16,10 +16,12 @@ process.env.MCP_OAUTH_DIR = TEST_DIR
 import {
   getAuthEntry,
   getAuthEntryFilePath,
+  migrateLegacyAuthEntry,
   getAuthForUrl,
   saveAuthEntry,
   removeAuthEntry,
   updateTokens,
+  updateTokensIfRevisionMatches,
   updateClientInfo,
   updateCodeVerifier,
   clearCodeVerifier,
@@ -69,7 +71,7 @@ describe("mcp-auth", () => {
       deleteCredential(): boolean { return true }
     }
 
-    it("loads the native binding by absolute path when the package loader fails", () => {
+    it("loads the native binding by absolute path when the package loader fails", async () => {
       const loaderError = new Error("package loader failed")
       const nativePath = "/tmp/keyring-darwin-arm64/keyring.darwin-arm64.node"
       const required: string[] = []
@@ -91,7 +93,7 @@ describe("mcp-auth", () => {
       assert.deepStrictEqual(required, ["@napi-rs/keyring", nativePath])
     })
 
-    it("tries the Linux musl package when the gnu package is unavailable", () => {
+    it("tries the Linux musl package when the gnu package is unavailable", async () => {
       const loaderError = new Error("package loader failed")
       const nativePath = "/tmp/keyring-linux-x64-musl/keyring.linux-x64-musl.node"
       const resolved: string[] = []
@@ -116,7 +118,7 @@ describe("mcp-auth", () => {
       ])
     })
 
-    it("keeps the original loader error in the cause chain when fallback fails", () => {
+    it("keeps the original loader error in the cause chain when fallback fails", async () => {
       const loaderError = new Error("package loader failed")
       const fallbackError = new Error("native binding failed")
       const requireStub = Object.assign((id: string) => {
@@ -140,12 +142,12 @@ describe("mcp-auth", () => {
   })
 
   describe("getAuthEntry", () => {
-    it("should return undefined for non-existent entry", () => {
+    it("should return undefined for non-existent entry", async () => {
       const entry = getAuthEntry("non-existent")
       assert.strictEqual(entry, undefined)
     })
 
-    it("should import legacy plaintext entries and remove the file", () => {
+    it("should import legacy plaintext entries and remove the file", async () => {
       const filePath = getAuthEntryFilePath("legacy-import")
       mkdirSync(dirname(filePath), { recursive: true })
       writeFileSync(filePath, JSON.stringify({
@@ -153,7 +155,7 @@ describe("mcp-auth", () => {
         serverUrl: "https://api.example.com",
       }), "utf-8")
 
-      const entry = getAuthEntry("legacy-import")
+      const entry = await migrateLegacyAuthEntry("legacy-import")
       assert.strictEqual(entry?.tokens?.accessToken, "legacy-token")
       assert.strictEqual(existsSync(filePath), false)
       assert.strictEqual(getAuthEntry("legacy-import")?.tokens?.accessToken, "legacy-token")
@@ -193,7 +195,7 @@ describe("mcp-auth", () => {
   })
 
   describe("saveAuthEntry / getAuthEntry", () => {
-    it("should save and retrieve an auth entry", () => {
+    it("should save and retrieve an auth entry", async () => {
       const entry: AuthEntry = {
         tokens: {
           accessToken: "test-token",
@@ -204,13 +206,13 @@ describe("mcp-auth", () => {
         serverUrl: "https://api.example.com",
       }
 
-      saveAuthEntry("test-server", entry, "https://api.example.com")
+      await saveAuthEntry("test-server", entry, "https://api.example.com")
       const retrieved = getAuthEntry("test-server")
 
       assert.deepStrictEqual(retrieved, entry)
     })
 
-    it("should update existing entries", () => {
+    it("should update existing entries", async () => {
       const entry1: AuthEntry = {
         tokens: { accessToken: "token1" },
         serverUrl: "https://api.example.com",
@@ -220,8 +222,8 @@ describe("mcp-auth", () => {
         serverUrl: "https://api.example.com",
       }
 
-      saveAuthEntry("test-server", entry1, "https://api.example.com")
-      saveAuthEntry("test-server", entry2, "https://api.example.com")
+      await saveAuthEntry("test-server", entry1, "https://api.example.com")
+      await saveAuthEntry("test-server", entry2, "https://api.example.com")
       const retrieved = getAuthEntry("test-server")
 
       assert.strictEqual(retrieved?.tokens?.accessToken, "token2")
@@ -229,36 +231,36 @@ describe("mcp-auth", () => {
   })
 
   describe("getAuthForUrl", () => {
-    it("should return entry when URL matches", () => {
+    it("should return entry when URL matches", async () => {
       const entry: AuthEntry = {
         tokens: { accessToken: "test-token" },
         serverUrl: "https://api.example.com",
       }
 
-      saveAuthEntry("test-server", entry, "https://api.example.com")
+      await saveAuthEntry("test-server", entry, "https://api.example.com")
       const retrieved = getAuthForUrl("test-server", "https://api.example.com")
 
       assert.deepStrictEqual(retrieved, entry)
     })
 
-    it("should return undefined when URL doesn't match", () => {
+    it("should return undefined when URL doesn't match", async () => {
       const entry: AuthEntry = {
         tokens: { accessToken: "test-token" },
         serverUrl: "https://api.example.com",
       }
 
-      saveAuthEntry("test-server", entry, "https://api.example.com")
+      await saveAuthEntry("test-server", entry, "https://api.example.com")
       const retrieved = getAuthForUrl("test-server", "https://different.com")
 
       assert.strictEqual(retrieved, undefined)
     })
 
-    it("should return undefined when serverUrl is not stored", () => {
+    it("should return undefined when serverUrl is not stored", async () => {
       const entry: AuthEntry = {
         tokens: { accessToken: "test-token" },
       }
 
-      saveAuthEntry("test-server", entry)
+      await saveAuthEntry("test-server", entry)
       const retrieved = getAuthForUrl("test-server", "https://api.example.com")
 
       assert.strictEqual(retrieved, undefined)
@@ -266,13 +268,13 @@ describe("mcp-auth", () => {
   })
 
   describe("removeAuthEntry", () => {
-    it("should remove an entry", () => {
+    it("should remove an entry", async () => {
       const entry: AuthEntry = {
         tokens: { accessToken: "test-token" },
       }
 
-      saveAuthEntry("test-server", entry)
-      removeAuthEntry("test-server")
+      await saveAuthEntry("test-server", entry)
+      await removeAuthEntry("test-server")
       const retrieved = getAuthEntry("test-server")
 
       assert.strictEqual(retrieved, undefined)
@@ -280,8 +282,8 @@ describe("mcp-auth", () => {
   })
 
   describe("updateTokens", () => {
-    it("should update tokens for a server", () => {
-      updateTokens("test-server", {
+    it("should update tokens for a server", async () => {
+      await updateTokens("test-server", {
         accessToken: "new-token",
         refreshToken: "new-refresh",
         expiresAt: 1234567890,
@@ -292,17 +294,17 @@ describe("mcp-auth", () => {
       assert.strictEqual(entry?.tokens?.accessToken, "new-token")
     })
 
-    it("should preserve existing client info", () => {
-      updateClientInfo("test-server", { clientId: "client-123" })
-      updateTokens("test-server", { accessToken: "token" })
+    it("should preserve existing client info", async () => {
+      await updateClientInfo("test-server", { clientId: "client-123" })
+      await updateTokens("test-server", { accessToken: "token" })
 
       const entry = getAuthEntry("test-server")
       assert.strictEqual(entry?.clientInfo?.clientId, "client-123")
       assert.strictEqual(entry?.tokens?.accessToken, "token")
     })
 
-    it("should clear URL-bound auth state when tokens move to a different server URL", () => {
-      saveAuthEntry("token-url-change", {
+    it("should clear URL-bound auth state when tokens move to a different server URL", async () => {
+      await saveAuthEntry("token-url-change", {
         tokens: { accessToken: "old-token", refreshToken: "old-refresh" },
         clientInfo: { clientId: "old-client" },
         codeVerifier: "old-verifier",
@@ -310,7 +312,7 @@ describe("mcp-auth", () => {
         serverUrl: "https://old.example.com/mcp",
       }, "https://old.example.com/mcp")
 
-      updateTokens("token-url-change", { accessToken: "new-token" }, "https://new.example.com/mcp")
+      await updateTokens("token-url-change", { accessToken: "new-token" }, "https://new.example.com/mcp")
 
       assert.strictEqual(getAuthForUrl("token-url-change", "https://old.example.com/mcp"), undefined)
       const newEntry = getAuthForUrl("token-url-change", "https://new.example.com/mcp")
@@ -320,15 +322,15 @@ describe("mcp-auth", () => {
       assert.strictEqual(newEntry?.oauthState, undefined)
     })
 
-    it("should clear legacy URL-bound auth state when saving tokens with a server URL", () => {
-      saveAuthEntry("token-legacy-url-change", {
+    it("should clear legacy URL-bound auth state when saving tokens with a server URL", async () => {
+      await saveAuthEntry("token-legacy-url-change", {
         tokens: { accessToken: "old-token", refreshToken: "old-refresh" },
         clientInfo: { clientId: "old-client" },
         codeVerifier: "old-verifier",
         oauthState: "old-state",
       })
 
-      updateTokens("token-legacy-url-change", { accessToken: "new-token" }, "https://new.example.com/mcp")
+      await updateTokens("token-legacy-url-change", { accessToken: "new-token" }, "https://new.example.com/mcp")
 
       const newEntry = getAuthForUrl("token-legacy-url-change", "https://new.example.com/mcp")
       assert.strictEqual(newEntry?.tokens?.accessToken, "new-token")
@@ -339,8 +341,8 @@ describe("mcp-auth", () => {
   })
 
   describe("updateClientInfo", () => {
-    it("should update client info for a server", () => {
-      updateClientInfo("test-server", {
+    it("should update client info for a server", async () => {
+      await updateClientInfo("test-server", {
         clientId: "client-123",
         clientSecret: "secret",
         clientIdIssuedAt: 1234567890,
@@ -352,8 +354,8 @@ describe("mcp-auth", () => {
       assert.strictEqual(entry?.clientInfo?.clientSecret, "secret")
     })
 
-    it("should clear URL-bound credentials when client info moves to a different server URL", () => {
-      saveAuthEntry("url-change", {
+    it("should clear URL-bound credentials when client info moves to a different server URL", async () => {
+      await saveAuthEntry("url-change", {
         tokens: { accessToken: "old-token", refreshToken: "old-refresh" },
         clientInfo: { clientId: "old-client" },
         codeVerifier: "old-verifier",
@@ -361,7 +363,7 @@ describe("mcp-auth", () => {
         serverUrl: "https://old.example.com/mcp",
       }, "https://old.example.com/mcp")
 
-      updateClientInfo("url-change", { clientId: "new-client" }, "https://new.example.com/mcp")
+      await updateClientInfo("url-change", { clientId: "new-client" }, "https://new.example.com/mcp")
 
       assert.strictEqual(getAuthForUrl("url-change", "https://old.example.com/mcp"), undefined)
       const newEntry = getAuthForUrl("url-change", "https://new.example.com/mcp")
@@ -371,15 +373,15 @@ describe("mcp-auth", () => {
       assert.strictEqual(newEntry?.oauthState, undefined)
     })
 
-    it("should clear stale verifier and state when legacy client info gains a server URL", () => {
-      saveAuthEntry("legacy-url-change", {
+    it("should clear stale verifier and state when legacy client info gains a server URL", async () => {
+      await saveAuthEntry("legacy-url-change", {
         tokens: { accessToken: "old-token", refreshToken: "old-refresh" },
         clientInfo: { clientId: "old-client" },
         codeVerifier: "old-verifier",
         oauthState: "old-state",
       })
 
-      updateClientInfo("legacy-url-change", { clientId: "new-client" }, "https://new.example.com/mcp")
+      await updateClientInfo("legacy-url-change", { clientId: "new-client" }, "https://new.example.com/mcp")
 
       const newEntry = getAuthForUrl("legacy-url-change", "https://new.example.com/mcp")
       assert.strictEqual(newEntry?.clientInfo?.clientId, "new-client")
@@ -390,49 +392,49 @@ describe("mcp-auth", () => {
   })
 
   describe("updateCodeVerifier / clearCodeVerifier", () => {
-    it("should save and retrieve code verifier", () => {
-      updateCodeVerifier("test-server", "verifier-123")
+    it("should save and retrieve code verifier", async () => {
+      await updateCodeVerifier("test-server", "verifier-123")
       const entry = getAuthEntry("test-server")
       assert.strictEqual(entry?.codeVerifier, "verifier-123")
     })
 
-    it("should clear code verifier", () => {
-      updateCodeVerifier("test-server", "verifier-123")
-      clearCodeVerifier("test-server")
+    it("should clear code verifier", async () => {
+      await updateCodeVerifier("test-server", "verifier-123")
+      await clearCodeVerifier("test-server")
       const entry = getAuthEntry("test-server")
       assert.strictEqual(entry?.codeVerifier, undefined)
     })
   })
 
   describe("updateOAuthState / getOAuthState / clearOAuthState", () => {
-    it("should save and retrieve OAuth state", () => {
-      updateOAuthState("test-server", "state-abc-123")
+    it("should save and retrieve OAuth state", async () => {
+      await updateOAuthState("test-server", "state-abc-123")
       const state = getOAuthState("test-server")
       assert.strictEqual(state, "state-abc-123")
     })
 
-    it("should clear OAuth state", () => {
-      updateOAuthState("test-server", "state-abc-123")
-      clearOAuthState("test-server")
+    it("should clear OAuth state", async () => {
+      await updateOAuthState("test-server", "state-abc-123")
+      await clearOAuthState("test-server")
       const state = getOAuthState("test-server")
       assert.strictEqual(state, undefined)
     })
   })
 
   describe("isTokenExpired", () => {
-    it("should return null if no tokens", () => {
+    it("should return null if no tokens", async () => {
       const expired = isTokenExpired("expiry-test-null")
       assert.strictEqual(expired, null)
     })
 
-    it("should return false if no expiry", () => {
-      updateTokens("expiry-test-no-expiry", { accessToken: "token" })
+    it("should return false if no expiry", async () => {
+      await updateTokens("expiry-test-no-expiry", { accessToken: "token" })
       const expired = isTokenExpired("expiry-test-no-expiry")
       assert.strictEqual(expired, false)
     })
 
-    it("should return true if expired", () => {
-      updateTokens("expiry-test-expired", {
+    it("should return true if expired", async () => {
+      await updateTokens("expiry-test-expired", {
         accessToken: "token",
         expiresAt: 1, // Way in the past
       })
@@ -440,8 +442,8 @@ describe("mcp-auth", () => {
       assert.strictEqual(expired, true)
     })
 
-    it("should return false if not expired", () => {
-      updateTokens("expiry-test-future", {
+    it("should return false if not expired", async () => {
+      await updateTokens("expiry-test-future", {
         accessToken: "token",
         expiresAt: Date.now() / 1000 + 3600, // 1 hour from now
       })
@@ -451,34 +453,34 @@ describe("mcp-auth", () => {
   })
 
   describe("hasStoredTokens", () => {
-    it("should return false if no tokens", () => {
+    it("should return false if no tokens", async () => {
       assert.strictEqual(hasStoredTokens("has-tokens-test-false"), false)
     })
 
-    it("should return true if tokens exist", () => {
-      updateTokens("has-tokens-test-true", { accessToken: "token" })
+    it("should return true if tokens exist", async () => {
+      await updateTokens("has-tokens-test-true", { accessToken: "token" })
       assert.strictEqual(hasStoredTokens("has-tokens-test-true"), true)
     })
   })
 
   describe("clearAllCredentials", () => {
-    it("should remove all credentials", () => {
-      updateTokens("test-server", { accessToken: "token" })
-      updateClientInfo("test-server", { clientId: "client" })
-      updateCodeVerifier("test-server", "verifier")
+    it("should remove all credentials", async () => {
+      await updateTokens("test-server", { accessToken: "token" })
+      await updateClientInfo("test-server", { clientId: "client" })
+      await updateCodeVerifier("test-server", "verifier")
 
-      clearAllCredentials("test-server")
+      await clearAllCredentials("test-server")
 
       assert.strictEqual(getAuthEntry("test-server"), undefined)
     })
   })
 
   describe("clearClientInfo", () => {
-    it("should only remove client info", () => {
-      updateTokens("test-server", { accessToken: "token" })
-      updateClientInfo("test-server", { clientId: "client" })
+    it("should only remove client info", async () => {
+      await updateTokens("test-server", { accessToken: "token" })
+      await updateClientInfo("test-server", { clientId: "client" })
 
-      clearClientInfo("test-server")
+      await clearClientInfo("test-server")
 
       const entry = getAuthEntry("test-server")
       assert.strictEqual(entry?.clientInfo, undefined)
@@ -486,12 +488,29 @@ describe("mcp-auth", () => {
     })
   })
 
-  describe("clearTokens", () => {
-    it("should only remove tokens", () => {
-      updateTokens("test-server", { accessToken: "token" })
-      updateClientInfo("test-server", { clientId: "client" })
+  describe("token revision fencing", () => {
+    it("rejects publication from a stale refresh snapshot", async () => {
+      const name = "stale-refresh-publication"
+      await updateTokens(name, { accessToken: "old" }, "https://example.com")
+      const staleRevision = getAuthForUrl(name, "https://example.com")?.tokenRevision
+      await updateTokens(name, { accessToken: "successor" }, "https://example.com")
 
-      clearTokens("test-server")
+      assert.strictEqual(await updateTokensIfRevisionMatches(
+        name,
+        { accessToken: "stale-result" },
+        staleRevision,
+        "https://example.com",
+      ), false)
+      assert.strictEqual(getAuthForUrl(name, "https://example.com")?.tokens?.accessToken, "successor")
+    })
+  })
+
+  describe("clearTokens", () => {
+    it("should only remove tokens", async () => {
+      await updateTokens("test-server", { accessToken: "token" })
+      await updateClientInfo("test-server", { clientId: "client" })
+
+      await clearTokens("test-server")
 
       const entry = getAuthEntry("test-server")
       assert.strictEqual(entry?.tokens, undefined)

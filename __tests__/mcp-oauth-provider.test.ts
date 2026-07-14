@@ -482,7 +482,7 @@ describe("McpOAuthProvider discovery state", () => {
   });
 
   it("back-stamps legacy client information and tokens with the discovered issuer", async () => {
-    saveAuthEntry("legacy-binding", {
+    await saveAuthEntry("legacy-binding", {
       clientInfo: {
         clientId: "legacy-client",
         clientSecret: "legacy-secret",
@@ -526,7 +526,7 @@ describe("McpOAuthProvider discovery state", () => {
   });
 
   it("rejects stored credentials when the issuer changes before refresh", async () => {
-    saveAuthEntry("changed-issuer", {
+    await saveAuthEntry("changed-issuer", {
       clientInfo: {
         clientId: "bound-client",
         clientSecret: "bound-secret",
@@ -566,7 +566,7 @@ describe("McpOAuthProvider discovery state", () => {
   });
 
   it("does not stamp unbound tokens when client information has a different issuer", async () => {
-    saveAuthEntry("partial-client-binding", {
+    await saveAuthEntry("partial-client-binding", {
       clientInfo: {
         clientId: "bound-client",
         clientSecret: "bound-secret",
@@ -589,7 +589,7 @@ describe("McpOAuthProvider discovery state", () => {
   });
 
   it("does not stamp unbound client information when tokens have a different issuer", async () => {
-    saveAuthEntry("partial-token-binding", {
+    await saveAuthEntry("partial-token-binding", {
       clientInfo: {
         clientId: "legacy-client",
         clientSecret: "legacy-secret",
@@ -644,7 +644,7 @@ describe("McpOAuthProvider discovery state", () => {
   });
 
   it("fails closed when a pre-registered client issuer changes", async () => {
-    saveAuthEntry("pre-registered-issuer-change", {
+    await saveAuthEntry("pre-registered-issuer-change", {
       clientInfo: {
         clientId: "config-client",
         issuer: "https://old-auth.example.com",
@@ -774,7 +774,7 @@ describe("McpOAuthProvider authorization fallback", () => {
 
   it("throws before redirecting when only stale URL-bound state exists", async () => {
     let redirected = false;
-    saveAuthEntry("redirect-stale-url", {
+    await saveAuthEntry("redirect-stale-url", {
       oauthState: "state-abc",
       serverUrl: "https://old.example.com/mcp",
     }, "https://old.example.com/mcp");

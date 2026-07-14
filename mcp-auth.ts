@@ -11,13 +11,19 @@
  */
 
 import { spawnSync } from 'child_process';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto';
 import { createRequire } from 'module';
 import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getAgentPath } from './agent-dir.ts';
 import { resolveConfiguredOAuthDir } from './config.ts';
+import {
+  acquireCredentialLock,
+  releaseAuthLock,
+  withAuthPublication,
+  type AuthLockFence,
+} from './mcp-auth-lock.ts';
 
 const require = createRequire(import.meta.url);
 const AUTH_SECRET_SERVICE = 'pi-mcp-adapter.oauth';
@@ -120,7 +126,11 @@ export interface StoredClientInfo {
 /** Complete auth entry for a server */
 export interface AuthEntry {
   tokens?: StoredTokens;
+  /** Changes whenever tokens are replaced, allowing stale refreshes to be fenced. */
+  tokenRevision?: string;
   clientInfo?: StoredClientInfo;
+  /** Changes whenever client information is replaced. */
+  clientRevision?: string;
   codeVerifier?: string;
   oauthState?: string;
   serverUrl?: string; // Track the URL these credentials are for
@@ -442,6 +452,15 @@ function createEncryptedFileAuthSecretStore(): AuthSecretStore {
 
 function getAuthSecretStore(options: AuthStorageOptions = {}): AuthSecretStore {
   if (options.credentialStore === 'encrypted-file') return createEncryptedFileAuthSecretStore();
+  const testStore = process.env[TEST_AUTH_STORE_ENV];
+  if (testStore?.startsWith('file:')) {
+    const directory = testStore.slice('file:'.length);
+    return {
+      read(account) { const path = join(directory, account); return existsSync(path) ? readFileSync(path, 'utf8') : undefined; },
+      write(account, payload) { mkdirSync(directory, { recursive: true, mode: 0o700 }); writeFileSync(join(directory, account), payload, { mode: 0o600 }); },
+      remove(account) { rmSync(join(directory, account), { force: true }); },
+    };
+  }
   if (process.env[TEST_AUTH_STORE_ENV] === 'memory') return memoryAuthSecretStore;
   if (process.env[TEST_AUTH_STORE_ENV] === 'sizelimited') return sizeLimitedAuthSecretStore;
   if (process.env[TEST_AUTH_STORE_ENV] === 'writefailing') return writeFailingAuthSecretStore;
@@ -614,7 +633,7 @@ export function getAuthBaseDir(options: AuthStorageOptions = {}): string {
 /**
  * Get the legacy server-specific directory path.
  */
-function getServerDir(serverName: string, options?: AuthStorageOptions): string {
+export function getServerDir(serverName: string, options?: AuthStorageOptions): string {
   if (typeof serverName !== 'string') {
     throw new Error(`Invalid MCP server name: ${JSON.stringify(serverName)}`);
   }
@@ -657,10 +676,15 @@ function toAuthEntry(value: unknown): AuthEntry | undefined {
   const entry = toRecord(value);
   if (!entry) return undefined;
 
+  const tokenRevision = optionalString(entry.tokenRevision);
+  const clientRevision = optionalString(entry.clientRevision);
   const codeVerifier = optionalString(entry.codeVerifier);
   const oauthState = optionalString(entry.oauthState);
   const serverUrl = optionalString(entry.serverUrl);
-  if (codeVerifier === null || oauthState === null || serverUrl === null) return undefined;
+  if (
+    tokenRevision === null || clientRevision === null || codeVerifier === null
+    || oauthState === null || serverUrl === null
+  ) return undefined;
 
   const tokens = entry.tokens === undefined ? undefined : toStoredTokens(entry.tokens);
   const clientInfo = entry.clientInfo === undefined ? undefined : toStoredClientInfo(entry.clientInfo);
@@ -668,7 +692,9 @@ function toAuthEntry(value: unknown): AuthEntry | undefined {
 
   const authEntry: AuthEntry = {};
   if (tokens) authEntry.tokens = tokens;
+  if (tokenRevision !== undefined) authEntry.tokenRevision = tokenRevision;
   if (clientInfo) authEntry.clientInfo = clientInfo;
+  if (clientRevision !== undefined) authEntry.clientRevision = clientRevision;
   if (codeVerifier !== undefined) authEntry.codeVerifier = codeVerifier;
   if (oauthState !== undefined) authEntry.oauthState = oauthState;
   if (serverUrl !== undefined) authEntry.serverUrl = serverUrl;
@@ -812,8 +838,8 @@ function splitAuthPayload(payload: string): string[] {
 function createChunkManifest(payload: string, chunkCount: number): AuthEntryChunkManifest {
   return {
     [AUTH_CHUNK_MANIFEST_KEY]: 1,
-    chunkCount,
-    chunkDigest: getAuthEntryChunkDigest(payload),
+    chunkCount: Math.ceil(payload.length / AUTH_SECRET_CHUNK_SIZE),
+    chunkDigest: createHash('sha256').update(payload, 'utf8').digest('hex').slice(0, 16),
   };
 }
 
@@ -822,20 +848,12 @@ function readChunkedAuthEntry(store: AuthSecretStore, serverName: string, accoun
   try {
     payload = getAuthEntryChunkAccounts(account, manifest).map((chunkAccount) => {
       const chunk = store.read(chunkAccount);
-      if (chunk === undefined) {
-        throw new Error(`Missing OAuth credential chunk ${chunkAccount} for ${serverName}`);
-      }
+      if (chunk === undefined) throw new Error(`Missing OAuth credential chunk ${chunkAccount} for ${serverName}`);
       return chunk;
     }).join('');
-    if (getAuthEntryChunkDigest(payload) !== manifest.chunkDigest) {
-      throw new Error('OAuth credential chunk integrity check failed');
-    }
+    if (getAuthEntryChunkDigest(payload) !== manifest.chunkDigest) throw new Error('OAuth credential chunk integrity check failed');
   } catch (error) {
-    throw new OAuthCredentialStoreError(
-      `Failed to read OAuth credentials for ${serverName} from the ${authSecretStoreLabel(store)}`,
-      'read',
-      error,
-    );
+    throw new OAuthCredentialStoreError(`Failed to read OAuth credentials for ${serverName} from the ${authSecretStoreLabel(store)}`, 'read', error);
   }
   return parseAuthEntryPayload(serverName, payload, `${authSecretStoreLabel(store)} chunks`);
 }
@@ -872,8 +890,9 @@ function writeSecureAuthEntryToStore(store: AuthSecretStore, serverName: string,
   const manifest = chunks ? createChunkManifest(payload, chunks.length) : undefined;
 
   try {
-    if (manifest && chunks) {
-      for (const [index, chunk] of chunks.entries()) {
+    if (manifest) {
+      for (let index = 0; index < manifest.chunkCount; index++) {
+        const chunk = payload.slice(index * AUTH_SECRET_CHUNK_SIZE, (index + 1) * AUTH_SECRET_CHUNK_SIZE);
         store.write(getAuthEntryChunkAccount(account, manifest, index), chunk);
       }
       store.write(account, JSON.stringify(manifest));
@@ -985,7 +1004,7 @@ function readAuthEntryFromStore(
 function readAuthEntry(
   serverName: string,
   options?: AuthStorageOptions,
-  behavior: { migrateLegacy?: boolean } = {},
+  behavior: { migrateLegacy?: boolean; cache?: boolean } = {},
 ): AuthEntry | undefined {
   // Status-only reads deliberately bypass the cache because they do not
   // migrate legacy entries.
@@ -1011,7 +1030,38 @@ function readAuthEntry(
  * Get auth entry for a server.
  */
 export function getAuthEntry(serverName: string, options?: AuthStorageOptions): AuthEntry | undefined {
-  return readAuthEntry(serverName, options);
+  return readAuthEntry(serverName, options, { migrateLegacy: false });
+}
+
+/** Import legacy plaintext credentials through the credential mutation lock. */
+export async function migrateLegacyAuthEntry(serverName: string, options?: AuthStorageOptions): Promise<AuthEntry | undefined> {
+  if (!existsSync(getAuthEntryFilePath(serverName, options))) {
+    return getAuthEntry(serverName, options);
+  }
+
+  return withCredentialMutation(serverName, held => {
+    let store = getAuthSecretStore();
+    const account = getAuthEntryAccount(serverName);
+    // Revalidate secure storage only after acquiring the lock; never overwrite a successor.
+    let securePayload: string | undefined;
+    try { securePayload = store.read(account); }
+    catch (error) {
+      if (!shouldAttemptLinuxKeyringRecovery(error)) throw new OAuthCredentialStoreError(
+        `Failed to read OAuth credentials for ${serverName} from the OS secure credential store`, 'read', error,
+      );
+      store = linuxKeyringRecoveryAuthSecretStore;
+      securePayload = store.read(account);
+    }
+    if (securePayload !== undefined) {
+      const entry = readAuthEntryFromStore(store, serverName, options, { migrateLegacy: false });
+      withAuthPublication(held, () => removeLegacyAuthEntry(serverName, options));
+      return entry;
+    }
+    const legacy = readLegacyAuthEntry(serverName, options);
+    if (!legacy) return undefined;
+    writeAuthEntryLocked(serverName, legacy, undefined, options, held);
+    return legacy;
+  });
 }
 
 /**
@@ -1042,7 +1092,7 @@ export function inspectAuthForUrl(
   options?: AuthStorageOptions,
 ): OAuthCredentialStatus {
   try {
-    const entry = readAuthEntry(serverName, options, { migrateLegacy: false });
+    const entry = readAuthEntry(serverName, options, { migrateLegacy: false, cache: false });
     if (!entry?.serverUrl || entry.serverUrl !== serverUrl) return { status: 'absent' };
     return { status: 'present', entry };
   } catch (error) {
@@ -1054,18 +1104,29 @@ export function inspectAuthForUrl(
 /**
  * Save auth entry for a server.
  */
-export function saveAuthEntry(serverName: string, entry: AuthEntry, serverUrl?: string, options?: AuthStorageOptions): void {
-  // Always update serverUrl if provided
-  if (serverUrl) {
-    entry.serverUrl = serverUrl;
-  }
-  writeSecureAuthEntry(serverName, entry, options);
-  if (options?.credentialStore !== 'encrypted-file') removeLegacyAuthEntry(serverName, options);
+function writeAuthEntryLocked(serverName: string, entry: AuthEntry, serverUrl: string | undefined, options: AuthStorageOptions | undefined, storeFence: AuthLockFence, refreshFence?: AuthLockFence): void {
+  if (serverUrl) entry.serverUrl = serverUrl;
+  withAuthPublication(storeFence, () => {
+    const publish = () => { writeSecureAuthEntry(serverName, entry); removeLegacyAuthEntry(serverName, options); };
+    if (refreshFence) withAuthPublication(refreshFence, publish);
+    else publish();
+  });
 }
 
-/**
- * Remove auth entry for a server.
- */
+async function withCredentialMutation<T>(serverName: string, operation: (held: AuthLockFence) => T): Promise<T> {
+  const { fence, handle } = await acquireCredentialLock(serverName);
+  try {
+    if (isAuthEntryCacheEnabled()) authEntryCache.delete(serverName);
+    return operation(fence);
+  } finally {
+    await releaseAuthLock(fence, handle);
+  }
+}
+
+export async function saveAuthEntry(serverName: string, entry: AuthEntry, serverUrl?: string, options?: AuthStorageOptions): Promise<void> {
+  await withCredentialMutation(serverName, held => writeAuthEntryLocked(serverName, entry, serverUrl, options, held));
+}
+
 function removeAuthEntryFromStore(store: AuthSecretStore, serverName: string): void {
   const account = getAuthEntryAccount(serverName);
   try {
@@ -1117,146 +1178,64 @@ export function invalidateAuthEntryCache(serverName: string): void {
   evictAuthEntryCache(serverName, { credentialStore: 'encrypted-file' });
 }
 
-/**
- * Update tokens for a server.
- */
-export function updateTokens(
-  serverName: string,
-  tokens: StoredTokens,
-  serverUrl?: string,
-  options?: AuthStorageOptions
-): void {
-  const entry = getAuthEntry(serverName, options) ?? {};
-  if (serverUrl && entry.serverUrl !== serverUrl) {
-    delete entry.clientInfo;
-    delete entry.codeVerifier;
-    delete entry.oauthState;
-  }
-  entry.tokens = tokens;
-  saveAuthEntry(serverName, entry, serverUrl, options);
+function clearForUrlChange(entry: AuthEntry, serverUrl?: string): void {
+  if (!serverUrl || entry.serverUrl === serverUrl) return;
+  delete entry.tokens; delete entry.tokenRevision; delete entry.clientInfo; delete entry.clientRevision;
+  delete entry.codeVerifier; delete entry.oauthState;
 }
 
-/**
- * Update client info for a server.
- */
-export function updateClientInfo(
-  serverName: string,
-  clientInfo: StoredClientInfo,
-  serverUrl?: string,
-  options?: AuthStorageOptions
-): void {
-  const entry = getAuthEntry(serverName, options) ?? {};
-  if (serverUrl && entry.serverUrl !== serverUrl) {
-    delete entry.tokens;
-    delete entry.codeVerifier;
-    delete entry.oauthState;
-  }
-  entry.clientInfo = clientInfo;
-  saveAuthEntry(serverName, entry, serverUrl, options);
+export async function updateTokens(serverName: string, tokens: StoredTokens, serverUrl?: string, options?: AuthStorageOptions, refreshFence?: AuthLockFence): Promise<void> {
+  await withCredentialMutation(serverName, held => {
+    const entry = readAuthEntry(serverName, options, { migrateLegacy: false }) ?? {};
+    clearForUrlChange(entry, serverUrl); entry.tokens = tokens; entry.tokenRevision = randomUUID();
+    writeAuthEntryLocked(serverName, entry, serverUrl, options, held, refreshFence);
+  });
 }
 
-/**
- * Update code verifier for a server.
- */
-export function updateCodeVerifier(serverName: string, codeVerifier: string, serverUrl?: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options) ?? {};
-  if (serverUrl && entry.serverUrl !== serverUrl) {
-    delete entry.tokens;
-    delete entry.clientInfo;
-    delete entry.oauthState;
-  }
-  entry.codeVerifier = codeVerifier;
-  saveAuthEntry(serverName, entry, serverUrl, options);
+export async function updateTokensIfRevisionMatches(serverName: string, tokens: StoredTokens, expectedRevision: string | undefined, serverUrl?: string, options?: AuthStorageOptions, refreshFence?: AuthLockFence): Promise<boolean> {
+  return withCredentialMutation(serverName, held => {
+    const entry = readAuthEntry(serverName, options, { migrateLegacy: false });
+    const currentRevision = entry?.serverUrl === serverUrl ? entry?.tokenRevision : undefined;
+    if (!entry || currentRevision !== expectedRevision) return false;
+    entry.tokens = tokens; entry.tokenRevision = randomUUID();
+    writeAuthEntryLocked(serverName, entry, serverUrl, options, held, refreshFence); return true;
+  });
 }
 
-/**
- * Clear code verifier for a server.
- */
-export function clearCodeVerifier(serverName: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options);
-  if (entry) {
-    delete entry.codeVerifier;
-    saveAuthEntry(serverName, entry, undefined, options);
-  }
+export async function updateClientInfo(serverName: string, clientInfo: StoredClientInfo, serverUrl?: string, options?: AuthStorageOptions): Promise<void> {
+  await withCredentialMutation(serverName, held => { const entry = readAuthEntry(serverName, options, { migrateLegacy: false }) ?? {}; clearForUrlChange(entry, serverUrl); entry.clientInfo = clientInfo; entry.clientRevision = randomUUID(); writeAuthEntryLocked(serverName, entry, serverUrl, options, held); });
 }
-
-/**
- * Update OAuth state for a server.
- */
-export function updateOAuthState(serverName: string, state: string, serverUrl?: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options) ?? {};
-  if (serverUrl && entry.serverUrl !== serverUrl) {
-    delete entry.tokens;
-    delete entry.clientInfo;
-    delete entry.codeVerifier;
-  }
-  entry.oauthState = state;
-  saveAuthEntry(serverName, entry, serverUrl, options);
+export async function updateCodeVerifier(serverName: string, value: string, serverUrl?: string, options?: AuthStorageOptions): Promise<void> {
+  await withCredentialMutation(serverName, held => { const entry = readAuthEntry(serverName, options, { migrateLegacy: false }) ?? {}; clearForUrlChange(entry, serverUrl); entry.codeVerifier = value; writeAuthEntryLocked(serverName, entry, serverUrl, options, held); });
 }
-
-/**
- * Get OAuth state for a server.
- */
-export function getOAuthState(serverName: string, options?: AuthStorageOptions): string | undefined {
-  const entry = getAuthEntry(serverName, options);
-  return entry?.oauthState;
+export async function clearCodeVerifier(serverName: string, options?: AuthStorageOptions): Promise<void> { await mutateEntry(serverName, options, entry => { delete entry.codeVerifier; }); }
+export async function updateOAuthState(serverName: string, state: string, serverUrl?: string, options?: AuthStorageOptions): Promise<void> {
+  await withCredentialMutation(serverName, held => { const entry = readAuthEntry(serverName, options, { migrateLegacy: false }) ?? {}; clearForUrlChange(entry, serverUrl); entry.oauthState = state; writeAuthEntryLocked(serverName, entry, serverUrl, options, held); });
 }
+export function getOAuthState(serverName: string, options?: AuthStorageOptions): string | undefined { return getAuthEntry(serverName, options)?.oauthState; }
+export async function clearOAuthState(serverName: string, options?: AuthStorageOptions): Promise<void> { await mutateEntry(serverName, options, entry => { delete entry.oauthState; }); }
+export function isTokenExpired(serverName: string, options?: AuthStorageOptions): boolean | null { const t = getAuthEntry(serverName, options)?.tokens; return !t ? null : !t.expiresAt ? false : t.expiresAt < Date.now() / 1000; }
+export function hasStoredTokens(serverName: string, options?: AuthStorageOptions): boolean { return !!getAuthEntry(serverName, options)?.tokens; }
+export async function clearAllCredentials(serverName: string, options?: AuthStorageOptions): Promise<void> { await removeAuthEntry(serverName, options); }
 
-/**
- * Clear OAuth state for a server.
- */
-export function clearOAuthState(serverName: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options);
-  if (entry) {
-    delete entry.oauthState;
-    saveAuthEntry(serverName, entry, undefined, options);
-  }
+async function mutateEntry(serverName: string, options: AuthStorageOptions | undefined, mutation: (entry: AuthEntry) => void): Promise<void> {
+  await withCredentialMutation(serverName, held => { const entry = readAuthEntry(serverName, options, { migrateLegacy: false }); if (!entry) return; mutation(entry); writeAuthEntryLocked(serverName, entry, undefined, options, held); });
 }
+export async function clearClientInfo(serverName: string, options?: AuthStorageOptions): Promise<void> { await mutateEntry(serverName, options, e => { delete e.clientInfo; delete e.clientRevision; }); }
+export async function clearTokens(serverName: string, options?: AuthStorageOptions): Promise<void> { await mutateEntry(serverName, options, e => { delete e.tokens; delete e.tokenRevision; }); }
 
-/**
- * Check if stored tokens are expired.
- * Returns null if no tokens exist, false if no expiry or not expired, true if expired.
- */
-export function isTokenExpired(serverName: string, options?: AuthStorageOptions): boolean | null {
-  const entry = getAuthEntry(serverName, options);
-  if (!entry?.tokens) return null;
-  if (!entry.tokens.expiresAt) return false;
-  return entry.tokens.expiresAt < Date.now() / 1000;
+export async function clearCredentialsIfRevisionsMatch(serverName: string, tokenRevision: string | undefined, clientRevision: string | undefined, options?: AuthStorageOptions): Promise<boolean> {
+  return withCredentialMutation(serverName, held => {
+    const entry = readAuthEntry(serverName, options, { migrateLegacy: false }); if (!entry) return false;
+    let changed = false;
+    if (entry.tokens && entry.tokenRevision === tokenRevision) { delete entry.tokens; delete entry.tokenRevision; changed = true; }
+    if (entry.clientInfo && entry.clientRevision === clientRevision) { delete entry.clientInfo; delete entry.clientRevision; changed = true; }
+    if (changed) writeAuthEntryLocked(serverName, entry, undefined, options, held); return changed;
+  });
 }
-
-/**
- * Check if a server has stored tokens.
- */
-export function hasStoredTokens(serverName: string, options?: AuthStorageOptions): boolean {
-  const entry = getAuthEntry(serverName, options);
-  return !!entry?.tokens;
+export async function clearClientInfoIfRevisionMatches(serverName: string, revision: string | undefined, options?: AuthStorageOptions): Promise<boolean> {
+  return withCredentialMutation(serverName, held => { const e = readAuthEntry(serverName, options, { migrateLegacy: false }); if (!e?.clientInfo || e.clientRevision !== revision) return false; delete e.clientInfo; delete e.clientRevision; writeAuthEntryLocked(serverName, e, undefined, options, held); return true; });
 }
-
-/**
- * Clear all credentials for a server.
- */
-export function clearAllCredentials(serverName: string, options?: AuthStorageOptions): void {
-  removeAuthEntry(serverName, options);
-}
-
-/**
- * Clear only client info for a server.
- */
-export function clearClientInfo(serverName: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options);
-  if (entry) {
-    delete entry.clientInfo;
-    saveAuthEntry(serverName, entry, undefined, options);
-  }
-}
-
-/**
- * Clear only tokens for a server.
- */
-export function clearTokens(serverName: string, options?: AuthStorageOptions): void {
-  const entry = getAuthEntry(serverName, options);
-  if (entry) {
-    delete entry.tokens;
-    saveAuthEntry(serverName, entry, undefined, options);
-  }
+export async function clearTokensIfRevisionMatches(serverName: string, revision: string | undefined, options?: AuthStorageOptions): Promise<boolean> {
+  return withCredentialMutation(serverName, held => { const e = readAuthEntry(serverName, options, { migrateLegacy: false }); if (!e?.tokens || e.tokenRevision !== revision) return false; delete e.tokens; delete e.tokenRevision; writeAuthEntryLocked(serverName, e, undefined, options, held); return true; });
 }

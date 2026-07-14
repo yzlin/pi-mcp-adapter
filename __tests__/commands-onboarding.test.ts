@@ -284,8 +284,8 @@ describe("commands onboarding", () => {
     const { waitForCallback } = await import("../mcp-callback-server.ts");
     const { logoutServer } = await import("../commands.ts");
 
-    updateTokens("oauth-server", { accessToken: "token", refreshToken: "refresh" }, "https://example.com/mcp");
-    updateOAuthState("oauth-server", "pending-state", "https://example.com/mcp");
+    await updateTokens("oauth-server", { accessToken: "token", refreshToken: "refresh" }, "https://example.com/mcp");
+    await updateOAuthState("oauth-server", "pending-state", "https://example.com/mcp");
     const pendingCallback = waitForCallback("pending-state");
     const pendingCallbackRejection = expect(pendingCallback).rejects.toThrow("Authorization cancelled");
 
@@ -309,8 +309,8 @@ describe("commands onboarding", () => {
     const { updateTokens } = await import("../mcp-auth.ts");
     const { openMcpPanel } = await import("../commands.ts");
 
-    updateTokens("legacy", { accessToken: "legacy-token" });
-    updateTokens("stale", { accessToken: "stale-token" }, "https://old.example.com/mcp");
+    await updateTokens("legacy", { accessToken: "legacy-token" });
+    await updateTokens("stale", { accessToken: "stale-token" }, "https://old.example.com/mcp");
 
     await openMcpPanel({
       config: {
@@ -333,7 +333,7 @@ describe("commands onboarding", () => {
     process.env.HOME = mkdtempSync(join(tmpdir(), "pi-mcp-commands-reconnect-"));
     const ui = createUi();
     const { updateTokens } = await import("../mcp-auth.ts");
-    updateTokens("notion", { accessToken: "token" }, "https://mcp.notion.com/mcp");
+    await updateTokens("notion", { accessToken: "token" }, "https://mcp.notion.com/mcp");
     let currentConnection: any = { status: "needs-auth" };
     const close = vi.fn(async () => {
       currentConnection = null;
