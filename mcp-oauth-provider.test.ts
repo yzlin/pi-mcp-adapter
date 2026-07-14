@@ -63,7 +63,7 @@ describe("McpOAuthProvider", () => {
   }
 
   describe("redirectUrl", () => {
-    it("should return the correct redirect URL", () => {
+    it("should return the correct redirect URL", async () => {
       const provider = createProvider()
       assert.strictEqual(
         provider.redirectUrl,
@@ -71,12 +71,12 @@ describe("McpOAuthProvider", () => {
       )
     })
 
-    it("should use a configured redirect URI", () => {
+    it("should use a configured redirect URI", async () => {
       const provider = createProvider({ redirectUri: "http://localhost:3118/slack/callback" })
       assert.strictEqual(provider.redirectUrl, "http://localhost:3118/slack/callback")
     })
 
-    it("should snapshot generated redirect URI at construction", () => {
+    it("should snapshot generated redirect URI at construction", async () => {
       const originalPort = getOAuthCallbackPort()
       const originalPath = getOAuthCallbackPath()
       setOAuthCallbackPort(41234)
@@ -193,7 +193,7 @@ describe("McpOAuthProvider", () => {
       assert.strictEqual(metadata.token_endpoint_auth_method, "client_secret_post")
     })
 
-    it("should use configured redirect URI and client metadata", () => {
+    it("should use configured redirect URI and client metadata", async () => {
       const provider = createProvider({
         redirectUri: "http://localhost:3118/slack/callback",
         clientName: "Slack MCP",
@@ -206,7 +206,7 @@ describe("McpOAuthProvider", () => {
       assert.strictEqual(metadata.client_uri, "https://example.com/slack-mcp")
     })
 
-    it("should use configured client name for client_credentials", () => {
+    it("should use configured client name for client_credentials", async () => {
       const provider = createProvider({
         grantType: "client_credentials",
         clientName: "Service MCP",
@@ -232,7 +232,7 @@ describe("McpOAuthProvider", () => {
       const provider = createProvider()
       
       // Save client info directly
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "stored-client",
           clientSecret: "stored-secret",
@@ -251,7 +251,7 @@ describe("McpOAuthProvider", () => {
       const provider = createProvider()
       
       // Save client info with different URL
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "stored-client",
           clientSecret: "stored-secret",
@@ -267,7 +267,7 @@ describe("McpOAuthProvider", () => {
       const provider = createProvider()
       
       // Save client info with expired secret
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "stored-client",
           clientSecret: "stored-secret",
@@ -284,7 +284,7 @@ describe("McpOAuthProvider", () => {
       // Stub written by the config-clientId path of saveClientInformation
       // (SEP-2352 stamp-and-resave): {clientId, issuer} with the marker.
       const provider = createProvider()
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "config-client",
           issuer: "https://auth.example.com",
@@ -298,7 +298,7 @@ describe("McpOAuthProvider", () => {
 
     it("should not serve a legacy unmarked {clientId, issuer} stub when no config clientId is present", async () => {
       const provider = createProvider()
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "config-client",
           issuer: "https://auth.example.com",
@@ -311,7 +311,7 @@ describe("McpOAuthProvider", () => {
 
     it("should still serve a dynamically-registered public client (no secret) with registration metadata", async () => {
       const provider = createProvider()
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "public-client",
           clientIdIssuedAt: Math.floor(Date.now() / 1000),
@@ -329,7 +329,7 @@ describe("McpOAuthProvider", () => {
       const provider = createProvider({ clientId: "config-client" })
       
       // Save different client info
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         clientInfo: {
           clientId: "stored-client",
           clientSecret: "stored-secret",
@@ -379,7 +379,7 @@ describe("McpOAuthProvider", () => {
       const provider = new McpOAuthProvider("stale-redirect-client", serverUrl, { redirectUri: "http://localhost:3118/current" }, {
         onRedirect: async () => {},
       })
-      saveAuthEntry("stale-redirect-client", {
+      await saveAuthEntry("stale-redirect-client", {
         clientInfo: {
           clientId: "stored-client",
           clientSecret: "stored-secret",
@@ -432,7 +432,7 @@ describe("McpOAuthProvider", () => {
       const provider = createProvider()
       
       // Save tokens with different URL
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         tokens: {
           accessToken: "token",
         },
@@ -476,7 +476,7 @@ describe("McpOAuthProvider", () => {
           redirected = true
         },
       })
-      saveAuthEntry("redirect-url-bound", {
+      await saveAuthEntry("redirect-url-bound", {
         oauthState: "stale-state",
         serverUrl: "https://different.example.com",
       }, "https://different.example.com")
@@ -517,7 +517,7 @@ describe("McpOAuthProvider", () => {
       const provider = new McpOAuthProvider("code-verifier-url-bound", serverUrl, {}, {
         onRedirect: async () => {},
       })
-      saveAuthEntry("code-verifier-url-bound", {
+      await saveAuthEntry("code-verifier-url-bound", {
         codeVerifier: "stale-verifier",
         serverUrl: "https://different.example.com",
       }, "https://different.example.com")
@@ -557,7 +557,7 @@ describe("McpOAuthProvider", () => {
       const provider = new McpOAuthProvider("state-url-bound", serverUrl, {}, {
         onRedirect: async () => {},
       })
-      saveAuthEntry("state-url-bound", {
+      await saveAuthEntry("state-url-bound", {
         oauthState: "stale-state",
         serverUrl: "https://different.example.com",
       }, "https://different.example.com")
@@ -566,6 +566,25 @@ describe("McpOAuthProvider", () => {
         async () => provider.state(),
         (err: unknown) => err instanceof UnauthorizedError && /Re-authentication required/.test((err as Error).message),
       )
+    })
+  })
+
+  describe("refresh coordination", () => {
+    it("does not join semantically different non-refresh operations", async () => {
+      const first = createProvider()
+      const second = createProvider()
+      const seen: string[] = []
+      const delegate = async (input: string | URL | Request) => {
+        seen.push(String(input))
+        return new Response("ok")
+      }
+
+      await Promise.all([
+        first.createAuthFetchFn(delegate)("https://issuer.example/register", { method: "POST", body: "client_name=one" }),
+        second.createAuthFetchFn(delegate)("https://issuer.example/token", { method: "POST", body: "grant_type=authorization_code" }),
+      ])
+
+      assert.deepStrictEqual(seen.sort(), ["https://issuer.example/register", "https://issuer.example/token"])
     })
   })
 
