@@ -30,9 +30,9 @@ import {
   clearClientInfoIfRevisionMatches,
   clearCodeVerifier,
   clearTokensIfRevisionMatches,
-  getServerDir,
   invalidateAuthEntryCache,
   captureOAuthAuthority,
+  quarantineRefreshToken,
   type AuthEntry,
   type AuthStorageOptions,
   type OAuthAuthority,
@@ -98,6 +98,21 @@ function toOAuthTokens(tokens: StoredTokens): IssuerBoundTokens {
 // Callback server configuration
 const DEFAULT_OAUTH_CALLBACK_PORT = 19876
 const DEFAULT_OAUTH_CALLBACK_PATH = "/callback"
+const DEFAULT_DETACHED_REFRESH_GRACE_MS = 5_000
+const MIN_DETACHED_REFRESH_GRACE_MS = 50
+const MAX_DETACHED_REFRESH_GRACE_MS = 60_000
+
+function detachedRefreshGraceMs(): number {
+  const configured = process.env.MCP_OAUTH_DETACHED_REFRESH_GRACE_MS
+  if (configured === undefined) return DEFAULT_DETACHED_REFRESH_GRACE_MS
+  const parsed = Number(configured)
+  if (!Number.isInteger(parsed)
+    || parsed < MIN_DETACHED_REFRESH_GRACE_MS
+    || parsed > MAX_DETACHED_REFRESH_GRACE_MS) {
+    return DEFAULT_DETACHED_REFRESH_GRACE_MS
+  }
+  return parsed
+}
 
 let configuredOAuthCallbackPort = DEFAULT_OAUTH_CALLBACK_PORT
 
@@ -268,10 +283,17 @@ export class McpOAuthProvider implements OAuthClientProvider {
     tokenRevision: string | undefined
     clientRevision: string | undefined
     joinedSuccessor?: StoredTokens
-    expectedInvalidation?: "tokens" | "client-tokens"
-    clientInvalidated?: boolean
+    releaseBlocked?: boolean
   } | undefined
   private active = true
+  private sdkAuthRuns = 0
+  private refreshAttempt: {
+    controller: AbortController
+    tokenRevision: string | undefined
+    refreshToken: string
+    detachedTimer?: ReturnType<typeof setTimeout>
+    cleanupPromise?: Promise<void>
+  } | undefined
   private flowClientInfo: StoredClientInfo | undefined
   private flowCodeVerifier: string | undefined
   private flowDiscoveryState: OAuthDiscoveryState | undefined
@@ -302,10 +324,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
     this.authFetch = createOAuthFetch(serverUrl, undefined, runtimeSignal)
     this.flowState = initialState
-    runtimeSignal?.addEventListener("abort", () => {
-      this.active = false
-      void this.releaseRefreshLease()
-    }, { once: true })
+    runtimeSignal?.addEventListener("abort", () => this.deactivate(), { once: true })
     this.redirectUrlSnapshot = config.grantType === "client_credentials"
       ? undefined
       : config.redirectUri ?? `http://localhost:${getOAuthCallbackPort()}${getOAuthCallbackPath()}`
@@ -321,7 +340,17 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Run one SDK auth call with guaranteed refresh-lease cleanup on every exit. */
   async withSdkAuth<T>(operation: () => Promise<T>): Promise<T> {
-    try { return await operation() } finally { await this.releaseRefreshLease() }
+    this.sdkAuthRuns++
+    try {
+      return await operation()
+    } finally {
+      this.sdkAuthRuns--
+      try {
+        await this.releaseRefreshLease()
+      } finally {
+        this.clearRefreshAttempt()
+      }
+    }
   }
 
   /** Fetch seam for one SDK auth run. Only rotating refresh POSTs coordinate. */
@@ -344,10 +373,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
         this.throwIfInactive()
 
         const requestedRefreshToken = params.get("refresh_token")
-        if (current?.tokens && (current.tokenRevision !== before
+        if (!current?.tokens) {
+          throw new UnauthorizedError(`Re-authentication required for MCP server: ${this.serverName}`)
+        }
+        if (current.tokenRevision !== before
           || current.tokens.accessToken !== initialTokens?.accessToken
           || current.tokens.refreshToken !== initialTokens?.refreshToken
-          || (requestedRefreshToken !== null && current.tokens.refreshToken !== requestedRefreshToken))) {
+          || (requestedRefreshToken !== null && current.tokens.refreshToken !== requestedRefreshToken)) {
           const tokens = current.tokens
           this.refreshLease.joinedSuccessor = structuredClone(tokens)
           return new Response(JSON.stringify({
@@ -359,29 +391,80 @@ export class McpOAuthProvider implements OAuthClientProvider {
           }), { status: 200, headers: { "content-type": "application/json" } })
         }
 
-        const response = await delegate(input, init)
-        if (!response.ok) {
-          try {
-            const body = await response.clone().json() as { error?: unknown }
-            if (body.error === "invalid_grant") this.refreshLease.expectedInvalidation = "tokens"
-            else if (body.error === "invalid_client" || body.error === "unauthorized_client") this.refreshLease.expectedInvalidation = "client-tokens"
-          } catch { /* malformed errors are released by withSdkAuth/fallback */ }
+        if (requestedRefreshToken === null) throw new Error("OAuth refresh request omitted its refresh token")
+        const refreshController = new AbortController()
+        this.refreshAttempt = {
+          controller: refreshController,
+          tokenRevision: current.tokenRevision,
+          refreshToken: requestedRefreshToken,
         }
-        return response
+        const delegateSignal = init?.signal
+          ? AbortSignal.any([init.signal, refreshController.signal])
+          : refreshController.signal
+        return await delegate(input, { ...init, signal: delegateSignal })
       } catch (error) {
-        if (!this.refreshLease) { stopHeartbeat(); await releaseAuthLock(fence, handle) }
-        else await this.releaseRefreshLease()
+        try {
+          if (!this.refreshLease) { stopHeartbeat(); await releaseAuthLock(fence, handle) }
+          else await this.releaseRefreshLease()
+        } finally {
+          this.clearRefreshAttempt()
+        }
         throw error
       }
     }
   }
 
-  private async releaseRefreshLease(): Promise<void> {
+  private async releaseRefreshLeaseNow(): Promise<void> {
     const lease = this.refreshLease
     if (!lease) return
     this.refreshLease = undefined
     lease.stopHeartbeat()
     await releaseAuthLock(lease.fence, lease.handle)
+  }
+
+  private async releaseRefreshLease(): Promise<void> {
+    const cleanup = this.refreshAttempt?.cleanupPromise
+    if (cleanup) return cleanup
+    if (this.refreshLease?.releaseBlocked) {
+      throw new Error("OAuth refresh lock retained because token quarantine was not confirmed")
+    }
+    await this.releaseRefreshLeaseNow()
+  }
+
+  private clearRefreshAttempt(attempt = this.refreshAttempt): void {
+    if (!attempt) return
+    if (attempt.detachedTimer !== undefined) clearTimeout(attempt.detachedTimer)
+    if (this.refreshAttempt === attempt) this.refreshAttempt = undefined
+  }
+
+  private boundDetachedRefresh(): void {
+    const attempt = this.refreshAttempt
+    if (!attempt || attempt.detachedTimer !== undefined) return
+    attempt.detachedTimer = setTimeout(() => {
+      delete attempt.detachedTimer
+      attempt.controller.abort(new DOMException("Detached OAuth refresh grace period expired", "AbortError"))
+      const lease = this.refreshLease
+      if (!lease) return
+      // The request may have rotated remotely before its response became indeterminate.
+      // Quarantine this exact generation before allowing another refresher to proceed.
+      attempt.cleanupPromise = quarantineRefreshToken(
+        this.serverName,
+        attempt.tokenRevision,
+        attempt.refreshToken,
+        this.serverUrl,
+        this.storageOptions,
+        lease.fence,
+      ).then(() => this.releaseRefreshLeaseNow()).catch(error => {
+        lease.releaseBlocked = true
+        throw error
+      })
+      void attempt.cleanupPromise.catch(error => {
+        // Keep the lease and heartbeat on failure: permitting reuse is less safe than
+        // blocking refresh until this process exits or the lock eventually goes stale.
+        console.error(`MCP Auth: Detached refresh quarantine failed for ${this.serverName}`, { error })
+      })
+    }, detachedRefreshGraceMs())
+    attempt.detachedTimer.unref()
   }
 
   private get discoveredIssuer(): string | undefined {
@@ -397,7 +480,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
     this.lastObservedClientId = undefined
     this.lastSavedAccessToken = undefined
     this.pendingAuthAccessToken = undefined
-    void this.releaseRefreshLease()
+    if (this.refreshAttempt) this.boundDetachedRefresh()
+    else if (this.sdkAuthRuns === 0) void this.releaseRefreshLease()
   }
 
   private assertStoredIssuerBindings(entry: AuthEntry | undefined, issuer: string | undefined): void {
@@ -678,7 +762,9 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
     const refreshLease = this.refreshLease
     try {
-      this.throwIfInactive()
+      // A dispatched refresh may rotate server state after its caller aborts.
+      // Its fenced result must still publish; detached non-refresh writes stay blocked.
+      if (!refreshLease) this.throwIfInactive()
       if (refreshLease?.joinedSuccessor) {
         const current = getAuthForUrl(this.serverName, this.serverUrl, this.storageOptions)
         if (current?.tokenRevision !== refreshLease.tokenRevision

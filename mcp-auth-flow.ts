@@ -487,7 +487,7 @@ export async function startAuth(
       const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
       authority()
       throwIfAborted(signal)
-      const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() }), signal))
+      const result = await abortable(authProvider.withSdkAuth(() => runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() })), signal)
       throwIfAborted(signal)
       if (result !== "AUTHORIZED") {
         throw new UnauthorizedError("Failed to authorize")
@@ -577,7 +577,7 @@ export async function startAuth(
     const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
     authority()
     throwIfAborted(signal)
-    const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() }), signal))
+    const result = await abortable(authProvider.withSdkAuth(() => runSdkAuth(authProvider, { serverUrl, ...discovery, fetchFn: authProvider.createAuthFetchFn() })), signal)
     throwIfAborted(signal)
     if (result === "AUTHORIZED") {
       authProvider.deactivate()
@@ -938,13 +938,13 @@ export async function completeAuth(
       throw new Error(`The OAuth authorization response issuer does not match the discovered issuer for ${serverName}.`)
     }
 
-    const result = await pendingAuth.authProvider.withSdkAuth(() => abortable(runSdkAuth(pendingAuth.authProvider, {
+    const result = await abortable(pendingAuth.authProvider.withSdkAuth(() => runSdkAuth(pendingAuth.authProvider, {
       serverUrl: pendingAuth.serverUrl,
       authorizationCode: code,
       ...(iss !== undefined ? { iss } : {}),
       ...pendingAuth.discovery,
       fetchFn: pendingAuth.authProvider.createAuthFetchFn(),
-    }), signal))
+    })), signal)
     throwIfAborted(signal)
     if (result !== "AUTHORIZED") {
       throw new UnauthorizedError("Failed to authorize")
@@ -1164,12 +1164,12 @@ export async function getValidToken(
         const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, options.definition, signal), config)
         authority()
         throwIfAborted(signal)
-        const result = await authProvider.withSdkAuth(() => abortable(runSdkAuth(authProvider, {
+        const result = await abortable(authProvider.withSdkAuth(() => runSdkAuth(authProvider, {
           serverUrl,
           ...discovery,
           fetchFn: authProvider.createAuthFetchFn(),
           ...(options.skipIssuerMetadataValidation === true ? { skipIssuerMetadataValidation: true } : {}),
-        }), signal))
+        })), signal)
         throwIfAborted(signal)
         if (result !== "AUTHORIZED") {
           return null

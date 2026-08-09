@@ -1239,3 +1239,25 @@ export async function clearClientInfoIfRevisionMatches(serverName: string, revis
 export async function clearTokensIfRevisionMatches(serverName: string, revision: string | undefined, options?: AuthStorageOptions): Promise<boolean> {
   return withCredentialMutation(serverName, held => { const e = readAuthEntry(serverName, options, { migrateLegacy: false }); if (!e?.tokens || e.tokenRevision !== revision) return false; delete e.tokens; delete e.tokenRevision; writeAuthEntryLocked(serverName, e, undefined, options, held); return true; });
 }
+/** Quarantine an indeterminate refresh generation while its refresh fence is still held. */
+export async function quarantineRefreshToken(
+  serverName: string,
+  expectedRevision: string | undefined,
+  expectedRefreshToken: string,
+  serverUrl: string,
+  options: AuthStorageOptions | undefined,
+  refreshFence: AuthLockFence,
+): Promise<"quarantined" | "superseded"> {
+  return withCredentialMutation(serverName, held => {
+    const entry = readAuthEntry(serverName, options, { migrateLegacy: false });
+    if (!entry?.tokens || entry.serverUrl !== serverUrl || entry.tokenRevision !== expectedRevision) return "superseded";
+    if (entry.tokens.refreshToken !== expectedRefreshToken) {
+      throw new Error("OAuth token generation changed without a matching revision");
+    }
+    delete entry.tokens;
+    delete entry.tokenRevision;
+    writeAuthEntryLocked(serverName, entry, serverUrl, options, held, refreshFence);
+    return "quarantined";
+  });
+}
+
