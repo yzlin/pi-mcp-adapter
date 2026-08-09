@@ -12,7 +12,7 @@ if (barrier) {
     try { await access(join(barrier, "go")); break } catch { await new Promise(resolve => setTimeout(resolve, 10)); }
   }
 }
-const provider = new McpOAuthProvider("shared", serverUrl, { clientId: "test-client" }, { onRedirect: async () => {} });
+const provider = new McpOAuthProvider("oauth-refresh-race-shared", serverUrl, { clientId: "test-client" }, { onRedirect: async () => {} });
 try {
   const outcome = await auth(provider, { serverUrl, fetchFn: provider.createAuthFetchFn() });
   console.log(JSON.stringify({ attemptId, pid: process.pid, elapsedMs: Math.round(performance.now() - started), outcome }));
