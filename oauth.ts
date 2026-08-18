@@ -48,5 +48,5 @@ export async function updateMcpOAuthTokensForUrl(
   tokens: McpOAuthTokens,
   options?: McpOAuthStorageOptions,
 ): Promise<void> {
-  updateTokens(serverName, tokens, serverUrl, options);
+  await updateTokens(serverName, tokens, serverUrl, options);
 }

@@ -222,7 +222,7 @@ describe("McpOAuthProvider discovery state", () => {
   it("preserves a stored DCR refresh pair before transitioning to CIMD after invalidation", async () => {
     const clientMetadataUrl = "https://client.example.com/oauth/client.json";
     const oldClientId = "old-dynamic-registration";
-    saveAuthEntry("cimd-migration", {
+    await saveAuthEntry("cimd-migration", {
       clientInfo: {
         clientId: oldClientId,
         redirectUris: ["http://localhost:19876/callback"],
@@ -286,7 +286,7 @@ describe("McpOAuthProvider discovery state", () => {
 
   it("selects CIMD immediately when stored DCR has no refresh pair to preserve", async () => {
     const clientMetadataUrl = "https://client.example.com/oauth/client.json";
-    saveAuthEntry("cimd-no-refresh", {
+    await saveAuthEntry("cimd-no-refresh", {
       clientInfo: {
         clientId: "old-dynamic-registration",
         redirectUris: ["http://localhost:19876/callback"],
@@ -315,7 +315,7 @@ describe("McpOAuthProvider discovery state", () => {
 
   it("retains DCR when the authorization server does not advertise CIMD", async () => {
     const clientMetadataUrl = "https://client.example.com/oauth/client.json";
-    saveAuthEntry("cimd-fallback", {
+    await saveAuthEntry("cimd-fallback", {
       clientInfo: {
         clientId: "dynamic-registration",
         redirectUris: ["http://localhost:19876/callback"],

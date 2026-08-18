@@ -7,10 +7,12 @@ import { spawn } from "node:child_process"
 import { auth } from "@modelcontextprotocol/client"
 import { abortable } from "../abort.ts"
 import { McpOAuthProvider } from "../mcp-oauth-provider.ts"
-import { getAuthEntry, getServerDir, updateClientInfo, updateTokens } from "../mcp-auth.ts"
+import { getAuthEntry, getServerDir, invalidateAuthEntryCache, updateClientInfo, updateTokens } from "../mcp-auth.ts"
 import { getAuthLockPath, ownsAuthLock, acquireAuthLock, releaseAuthLock } from "../mcp-auth-lock.ts"
 
 const SERVER_NAME = "oauth-refresh-race-shared"
+const AUTH_CACHE_DISABLED_ENV = "PI_MCP_ADAPTER_DISABLE_AUTH_CACHE"
+const defaultAuthCacheDisabled = process.env[AUTH_CACHE_DISABLED_ENV]
 const dirs: string[] = []
 const servers: Server[] = []
 async function directory() { const value = await mkdtemp(join(tmpdir(), "pi-oauth-race-")); dirs.push(value); return value }
@@ -115,6 +117,8 @@ afterEach(async () => {
   delete process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE
   delete process.env.MCP_OAUTH_DIR
   delete process.env.MCP_OAUTH_DETACHED_REFRESH_GRACE_MS
+  if (defaultAuthCacheDisabled === undefined) delete process.env[AUTH_CACHE_DISABLED_ENV]
+  else process.env[AUTH_CACHE_DISABLED_ENV] = defaultAuthCacheDisabled
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))))
   await Promise.all(dirs.splice(0).map(value => rm(value, { recursive: true, force: true })))
 })
@@ -180,7 +184,8 @@ describe("OAuth refresh race", () => {
     await releaseAuthLock(second.fence, second.handle)
   })
 
-  it("performs one rotating refresh across processes", async () => {
+  it("performs one rotating refresh across processes with the production cache enabled", async () => {
+    delete process.env[AUTH_CACHE_DISABLED_ENV]
     const { mock, store } = await setupExpiredRefresh({ metadataRequests: 2, refreshDelayMs: 1_000 })
     const barrier = await directory()
     const children = [child("one", mock.url, store, barrier), child("two", mock.url, store, barrier)]
@@ -190,6 +195,7 @@ describe("OAuth refresh race", () => {
     await writeFile(join(barrier, "go"), "go")
     await Promise.all(children)
     expect(mock.refreshes(), JSON.stringify(mock.suppliedRefreshes)).toBe(1)
+    invalidateAuthEntryCache(SERVER_NAME)
     expect(getAuthEntry(SERVER_NAME)?.tokens?.accessToken).toBe("access-1")
   })
 })

@@ -186,7 +186,7 @@ describe("mcp-auth-flow", () => {
       assert.strictEqual(entry?.tokens?.refreshToken, "refresh-token")
       assert.strictEqual(entry?.clientInfo?.clientId, "config-client")
 
-      clearAllCredentials(serverName)
+      await clearAllCredentials(serverName)
     })
   })
 
@@ -550,7 +550,7 @@ describe("mcp-auth-flow", () => {
       assert.strictEqual(entry?.tokens?.accessToken, "expired-access")
       assert.strictEqual(entry?.clientInfo?.clientId, "registered-client")
 
-      clearAllCredentials(serverName)
+      await clearAllCredentials(serverName)
     })
 
     it("should re-register the client on a stale redirect URI when no refresh token exists", async () => {
@@ -575,7 +575,7 @@ describe("mcp-auth-flow", () => {
       const entry = await getAuthForUrl(serverName, serverUrl)
       assert.strictEqual(entry?.clientInfo, undefined)
 
-      clearAllCredentials(serverName)
+      await clearAllCredentials(serverName)
     })
   })
 })
