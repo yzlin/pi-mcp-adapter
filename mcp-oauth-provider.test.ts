@@ -22,6 +22,7 @@ import {
   type McpOAuthConfig,
 } from "./mcp-oauth-provider.ts"
 import { getAuthForUrl, saveAuthEntry } from "./mcp-auth.ts"
+import { acquireCredentialLock, releaseAuthLock } from "./mcp-auth-lock.ts"
 import { UnauthorizedError } from "@modelcontextprotocol/client"
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/client"
 
@@ -442,6 +443,31 @@ describe("McpOAuthProvider", () => {
       const stored = await provider.tokens()
       assert.strictEqual(stored, undefined)
     })
+
+    it("should reject token persistence after deactivation while waiting for the credential lock", async () => {
+      const blockedServerName = "blocked-token-save"
+      const controller = new AbortController()
+      const provider = new McpOAuthProvider(blockedServerName, serverUrl, {}, {
+        onRedirect: async () => {},
+      }, {}, controller.signal)
+      const lock = await acquireCredentialLock(blockedServerName)
+      let released = false
+
+      try {
+        const pending = provider.saveTokens({
+          access_token: "late-token",
+          token_type: "Bearer",
+        })
+        controller.abort()
+        await releaseAuthLock(lock.fence, lock.handle)
+        released = true
+
+        await assert.rejects(pending, /OAuth flow is no longer active/)
+        assert.strictEqual(getAuthForUrl(blockedServerName, serverUrl), undefined)
+      } finally {
+        if (!released) await releaseAuthLock(lock.fence, lock.handle)
+      }
+    })
   })
 
   describe("redirectToAuthorization", () => {
@@ -644,7 +670,7 @@ describe("McpOAuthProvider", () => {
 
       // A separate process completes re-authentication after this provider has
       // already observed and cached the old token.
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         tokens: { accessToken: "replacement-token" },
         serverUrl,
       }, serverUrl)
@@ -731,7 +757,7 @@ describe("McpOAuthProvider", () => {
       })
       assert.strictEqual((await staleProvider.clientInformation())?.client_id, "stale-client")
 
-      saveAuthEntry(serverName, {
+      await saveAuthEntry(serverName, {
         tokens: { accessToken: "replacement-token" },
         clientInfo: {
           clientId: "replacement-client",

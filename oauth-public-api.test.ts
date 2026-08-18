@@ -76,8 +76,8 @@ describe("public OAuth token API", () => {
     assert.strictEqual((await getMcpOAuthTokensForUrl("jira", serverUrl))?.accessToken, "current-access");
   });
 
-  it("does not expose client info or OAuth flow secrets", () => {
-    saveAuthEntry("jira", {
+  it("does not expose client info or OAuth flow secrets", async () => {
+    await saveAuthEntry("jira", {
       tokens: { accessToken: "access-1" },
       clientInfo: { clientId: "client-1", clientSecret: "secret-1" },
       codeVerifier: "verifier-1",
@@ -92,7 +92,7 @@ describe("public OAuth token API", () => {
 
   it("does not return refreshable expired tokens as valid when refresh cannot complete", async () => {
     const expiresAt = Date.now() / 1000 - 3600;
-    saveAuthEntry("jira", {
+    await saveAuthEntry("jira", {
       tokens: {
         accessToken: "expired-token",
         refreshToken: "refresh-token",
@@ -145,7 +145,7 @@ describe("public OAuth token API", () => {
   });
 
   it("clears stale URL-bound state when tokens move to another URL", async () => {
-    saveAuthEntry("jira", {
+    await saveAuthEntry("jira", {
       tokens: { accessToken: "old-token" },
       clientInfo: { clientId: "old-client" },
       codeVerifier: "old-verifier",

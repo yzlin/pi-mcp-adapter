@@ -426,7 +426,7 @@ describe("mcp-auth-flow explicit auth", () => {
     const { removeAuth, startAuth } = await import("../mcp-auth-flow.ts");
 
     const pending = startAuth("pre-constructor", "https://api.example.com/mcp", { auth: "oauth" });
-    expect(mocks.ensureCallbackServer).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.ensureCallbackServer).toHaveBeenCalledOnce());
     await removeAuth("pre-constructor");
     release();
 
@@ -562,6 +562,7 @@ describe("mcp-auth-flow explicit auth", () => {
     const serverUrl = "https://api.example.com/mcp";
 
     const oldStart = startAuth("replacement", serverUrl, { auth: "oauth" });
+    await vi.waitFor(() => expect(mocks.ensureCallbackServer).toHaveBeenCalledOnce());
     await removeAuth("replacement");
     mocks.sdkAuth.mockImplementationOnce(async provider => {
       await provider.saveClientInformation({ client_id: "replacement-client" });
@@ -690,8 +691,10 @@ describe("mcp-auth-flow explicit auth", () => {
     ])).resolves.toEqual(["authenticated", "authenticated"]);
 
     expect(mocks.sdkAuth).toHaveBeenCalledTimes(2);
-    expect(getAuthForUrl("cross-backend", serverUrl)?.tokens?.accessToken).toBe("token-1");
-    expect(getAuthForUrl("cross-backend", serverUrl, encrypted)?.tokens?.accessToken).toBe("token-2");
+    expect(new Set([
+      getAuthForUrl("cross-backend", serverUrl)?.tokens?.accessToken,
+      getAuthForUrl("cross-backend", serverUrl, encrypted)?.tokens?.accessToken,
+    ])).toEqual(new Set(["token-1", "token-2"]));
     await shutdownOAuth(runtime);
     rmSync(agentDir, { recursive: true, force: true });
   });
@@ -772,11 +775,11 @@ describe("mcp-auth-flow explicit auth", () => {
     const { getValidToken, removeAuth } = await import("../mcp-auth-flow.ts");
     const { getAuthForUrl, updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
     const serverUrl = "https://api.example.com/mcp";
-    updateClientInfo("late-refresh", {
+    await updateClientInfo("late-refresh", {
       clientId: "client",
       redirectUris: ["http://localhost:19876/callback"],
     }, serverUrl);
-    updateTokens("late-refresh", {
+    await updateTokens("late-refresh", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,
@@ -795,11 +798,11 @@ describe("mcp-auth-flow explicit auth", () => {
     const { getValidToken, removeAuth } = await import("../mcp-auth-flow.ts");
     const { updateClientInfo, updateTokens } = await import("../mcp-auth.ts");
     const serverUrl = "https://api.example.com/mcp";
-    updateClientInfo("pre-refresh", {
+    await updateClientInfo("pre-refresh", {
       clientId: "client",
       redirectUris: ["http://localhost:19876/callback"],
     }, serverUrl);
-    updateTokens("pre-refresh", {
+    await updateTokens("pre-refresh", {
       accessToken: "old-access",
       refreshToken: "old-refresh",
       expiresAt: Date.now() / 1000 - 60,

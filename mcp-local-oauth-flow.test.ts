@@ -124,7 +124,7 @@ describe("local OAuth authorization-code flow", () => {
 
   after(async () => {
     await shutdownOAuth()
-    clearAllCredentials(serverName)
+    await clearAllCredentials(serverName)
     resetTestAuthSecretStore()
     await new Promise<void>(resolve => authServer.close(() => resolve()))
   })
@@ -222,7 +222,7 @@ describe("local OAuth authorization-code flow", () => {
       assert.ok(openedAuthorizationUrl)
       assert.strictEqual(tokenRequest?.get("code"), "watched-authorization-code")
     } finally {
-      clearAllCredentials(watchedServerName)
+      await clearAllCredentials(watchedServerName)
     }
   })
 
@@ -261,6 +261,6 @@ describe("local OAuth authorization-code flow", () => {
 
     const stored = await getAuthForUrl(refreshServerName, serverUrl)
     assert.strictEqual(stored?.clientInfo?.clientId, "new-dynamic-client")
-    clearAllCredentials(refreshServerName)
+    await clearAllCredentials(refreshServerName)
   })
 })

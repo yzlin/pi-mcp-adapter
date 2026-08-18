@@ -43,9 +43,9 @@ describe("bearer token credential store", () => {
     else process.env.PI_MCP_ADAPTER_TEST_AUTH_STORE = originalStore;
   });
 
-  it("keeps bearer records isolated by trusted server name and separate from OAuth records", () => {
+  it("keeps bearer records isolated by trusted server name and separate from OAuth records", async () => {
     saveBearerTokenForUrl("remote", "bearer-token", "https://example.test/mcp");
-    saveAuthEntry("remote", { tokens: { accessToken: "oauth-token" } }, "https://example.test/mcp");
+    await saveAuthEntry("remote", { tokens: { accessToken: "oauth-token" } }, "https://example.test/mcp");
 
     expect(getBearerTokenForUrl("remote", "https://example.test/mcp")).toBe("bearer-token");
     expect(getBearerTokenForUrl("other", "https://example.test/mcp")).toBeUndefined();

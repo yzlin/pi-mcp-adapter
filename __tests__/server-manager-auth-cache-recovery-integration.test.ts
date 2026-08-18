@@ -50,10 +50,10 @@ function unauthorized(): SdkHttpError {
   return new SdkHttpError(SdkErrorCode.ClientHttpAuthentication, "HTTP 401", { status: 401 });
 }
 
-function writeBehindTheCache(serverName: string, accessToken: string): void {
+async function writeBehindTheCache(serverName: string, accessToken: string): Promise<void> {
   const prior = process.env[DISABLE_ENV];
   process.env[DISABLE_ENV] = "1";
-  saveAuthEntry(serverName, { tokens: { accessToken } }, SERVER_URL);
+  await saveAuthEntry(serverName, { tokens: { accessToken } }, SERVER_URL);
   if (prior === undefined) delete process.env[DISABLE_ENV];
   else process.env[DISABLE_ENV] = prior;
 }
@@ -96,9 +96,9 @@ describe("auth cache recovery with the real OAuth provider", () => {
 
   it("evicts after an explicit OAuth 401 so the provider reloads an external rotation", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    saveAuthEntry("explicit", { tokens: { accessToken: "old" } }, SERVER_URL);
+    await saveAuthEntry("explicit", { tokens: { accessToken: "old" } }, SERVER_URL);
     expect(getAuthEntry("explicit")?.tokens?.accessToken).toBe("old");
-    writeBehindTheCache("explicit", "new");
+    await writeBehindTheCache("explicit", "new");
     mocks.connectSteps.push(() => { throw unauthorized(); });
 
     const connection = await new McpServerManager().connect("explicit", OAUTH_SERVER);
@@ -108,10 +108,13 @@ describe("auth cache recovery with the real OAuth provider", () => {
 
   it("uses stored credentials for an implicit OAuth connection and evicts after a 401", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    saveAuthEntry("implicit", { tokens: { accessToken: "old" } }, SERVER_URL);
+    await saveAuthEntry("implicit", { tokens: { accessToken: "old" } }, SERVER_URL);
     expect(getAuthEntry("implicit")?.tokens?.accessToken).toBe("old");
-    writeBehindTheCache("implicit", "new");
-    mocks.connectSteps.push(() => { throw unauthorized(); });
+    await writeBehindTheCache("implicit", "new");
+    mocks.connectSteps.push(
+      () => { throw unauthorized(); },
+      () => { throw unauthorized(); },
+    );
 
     const connection = await new McpServerManager().connect("implicit", { url: SERVER_URL });
 
@@ -124,7 +127,7 @@ describe("auth cache recovery with the real OAuth provider", () => {
   it("invalidates a stale absent cache before using newly stored implicit OAuth credentials", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
     expect(getAuthEntry("appearing")?.tokens).toBeUndefined();
-    writeBehindTheCache("appearing", "new");
+    await writeBehindTheCache("appearing", "new");
 
     const manager = new McpServerManager();
     await manager.connect("appearing", { url: SERVER_URL });
@@ -135,9 +138,9 @@ describe("auth cache recovery with the real OAuth provider", () => {
 
   it("keeps concurrent recovery connects single-flight", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    saveAuthEntry("shared", { tokens: { accessToken: "old" } }, SERVER_URL);
+    await saveAuthEntry("shared", { tokens: { accessToken: "old" } }, SERVER_URL);
     expect(getAuthEntry("shared")?.tokens?.accessToken).toBe("old");
-    writeBehindTheCache("shared", "new");
+    await writeBehindTheCache("shared", "new");
     let release!: () => void;
     let entered!: () => void;
     const blocked = new Promise<void>(resolve => { release = resolve; });

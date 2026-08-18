@@ -113,7 +113,7 @@ it("requires both service authentication and OAuth for MCP, including refresh an
 
     // Expiry exercises the real transport's SDK refresh path on reconnect.
     rejectExpiredAccess = true;
-    updateTokens("two-gate", { ...getAuthForUrl("two-gate", url)!.tokens!, expiresAt: Date.now() / 1000 - 3600 }, url);
+    await updateTokens("two-gate", { ...getAuthForUrl("two-gate", url)!.tokens!, expiresAt: Date.now() / 1000 - 3600 }, url);
     expect((await manager.connect("two-gate", definition)).status).toBe("connected");
     expect(grants).toEqual(["authorization_code", "refresh_token"]);
     expect(getAuthForUrl("two-gate", url)?.tokens?.accessToken).toBe("oauth-2");

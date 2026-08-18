@@ -77,7 +77,7 @@ describe("OAuth flow request timeout", () => {
       process.env.PI_MCP_OAUTH_REQUEST_TIMEOUT_MS = previousTimeoutMs
     }
     await shutdownOAuth()
-    clearAllCredentials(serverName)
+    await clearAllCredentials(serverName)
     resetTestAuthSecretStore()
     await new Promise<void>(resolve => server.close(() => resolve()))
   })
