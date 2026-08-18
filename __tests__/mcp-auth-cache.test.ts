@@ -9,6 +9,7 @@ import {
   getTestAuthSecretStoreReadCount,
   inspectAuthForUrl,
   invalidateAuthEntryCache,
+  migrateLegacyAuthEntry,
   removeAuthEntry,
   resetAuthEntryCache,
   resetTestAuthSecretStore,
@@ -106,8 +107,8 @@ describe("OAuth credential-entry cache — foundation", () => {
 describe("OAuth credential-entry cache — coherence", () => {
   useAuthCacheHarness();
 
-  it("caches present and absent reads", () => {
-    saveAuthEntry("present", { tokens: { accessToken: "a" } }, SERVER_URL);
+  it("caches present and absent reads", async () => {
+    await saveAuthEntry("present", { tokens: { accessToken: "a" } }, SERVER_URL);
     enableAuthEntryCache();
     resetAuthEntryCache();
     const before = getTestAuthSecretStoreReadCount();
@@ -121,22 +122,22 @@ describe("OAuth credential-entry cache — coherence", () => {
     expect(getTestAuthSecretStoreReadCount() - absentBefore).toBe(1);
   });
 
-  it("publishes writes, updates, and evicts removals", () => {
+  it("publishes writes, updates, and evicts removals", async () => {
     enableAuthEntryCache();
-    saveAuthEntry("entry", { tokens: { accessToken: "old" } }, SERVER_URL);
+    await saveAuthEntry("entry", { tokens: { accessToken: "old" } }, SERVER_URL);
     const before = getTestAuthSecretStoreReadCount();
     expect(getAuthEntry("entry")?.tokens?.accessToken).toBe("old");
     expect(getTestAuthSecretStoreReadCount() - before).toBe(0);
-    updateTokens("entry", { accessToken: "new" }, SERVER_URL);
+    await updateTokens("entry", { accessToken: "new" }, SERVER_URL);
     expect(getAuthEntry("entry")?.tokens?.accessToken).toBe("new");
-    removeAuthEntry("entry");
+    await removeAuthEntry("entry");
     const beforeAbsentRead = getTestAuthSecretStoreReadCount();
     expect(getAuthEntry("entry")).toBeUndefined();
     expect(getTestAuthSecretStoreReadCount() - beforeAbsentRead).toBeGreaterThan(0);
   });
 
-  it("isolates nested mutations and bypasses status inspection", () => {
-    saveAuthEntry("aliased", {
+  it("isolates nested mutations and bypasses status inspection", async () => {
+    await saveAuthEntry("aliased", {
       tokens: { accessToken: "a" },
       clientInfo: { clientId: "c", redirectUris: ["https://a.example"] },
     }, SERVER_URL);
@@ -163,8 +164,8 @@ describe("OAuth credential-entry cache — coherence", () => {
   });
 
 
-  it("keeps inspection uncached after an ordinary read warms the cache", () => {
-    saveAuthEntry("inspected", { tokens: { accessToken: "a" } }, SERVER_URL);
+  it("keeps inspection uncached after an ordinary read warms the cache", async () => {
+    await saveAuthEntry("inspected", { tokens: { accessToken: "a" } }, SERVER_URL);
     enableAuthEntryCache();
     resetAuthEntryCache();
 
@@ -175,7 +176,7 @@ describe("OAuth credential-entry cache — coherence", () => {
     expect(getTestAuthSecretStoreReadCount() - before).toBe(1);
   });
 
-  it("does not cache store failures and reconstructs chunked entries once", () => {
+  it("does not cache store failures and reconstructs chunked entries once", async () => {
     enableAuthEntryCache();
     process.env[STORE_ENV] = "unavailable";
     expect(() => getAuthEntry("failing")).toThrow(/OS secure credential store/);
@@ -183,7 +184,7 @@ describe("OAuth credential-entry cache — coherence", () => {
     process.env[STORE_ENV] = "memory";
     expect(getAuthEntry("failing")).toBeUndefined();
 
-    saveAuthEntry("chunked", { tokens: { accessToken: "x".repeat(5000) } }, SERVER_URL);
+    await saveAuthEntry("chunked", { tokens: { accessToken: "x".repeat(5000) } }, SERVER_URL);
     resetAuthEntryCache();
     getAuthEntry("chunked");
     const afterFirst = getTestAuthSecretStoreReadCount();
@@ -191,11 +192,11 @@ describe("OAuth credential-entry cache — coherence", () => {
     expect(getTestAuthSecretStoreReadCount()).toBe(afterFirst);
   });
 
-  it("does not cache a failed conversion and caches only after compaction succeeds", () => {
+  it("does not cache a failed conversion and caches only after compaction succeeds", async () => {
     if (process.platform === "win32") return;
     process.env[STORE_ENV] = "sizelimited";
     const token = "x".repeat(5000);
-    saveAuthEntry("conversion-cache", { tokens: { accessToken: token } }, SERVER_URL);
+    await saveAuthEntry("conversion-cache", { tokens: { accessToken: token } }, SERVER_URL);
     enableAuthEntryCache();
     resetAuthEntryCache();
 
@@ -205,13 +206,13 @@ describe("OAuth credential-entry cache — coherence", () => {
 
     process.env[STORE_ENV] = "writefailing";
     const beforeFailures = getTestAuthSecretStoreReadCount();
-    expect(() => getAuthEntry("conversion-cache")).toThrow(/write OAuth credentials/);
-    expect(() => getAuthEntry("conversion-cache")).toThrow(/write OAuth credentials/);
+    await expect(migrateLegacyAuthEntry("conversion-cache")).rejects.toThrow(/write OAuth credentials/);
+    await expect(migrateLegacyAuthEntry("conversion-cache")).rejects.toThrow(/write OAuth credentials/);
     expect(getTestAuthSecretStoreReadCount() - beforeFailures).toBeGreaterThan(2);
     expect(getTestAuthSecretStoreEntries().some(([account]) => account.includes(".chunk."))).toBe(true);
 
     process.env[STORE_ENV] = "memory";
-    expect(getAuthEntry("conversion-cache")?.tokens?.accessToken).toBe(token);
+    expect((await migrateLegacyAuthEntry("conversion-cache"))?.tokens?.accessToken).toBe(token);
     expect(getTestAuthSecretStoreEntries()).toHaveLength(1);
     const afterSuccess = getTestAuthSecretStoreReadCount();
     expect(getAuthEntry("conversion-cache")?.tokens?.accessToken).toBe(token);
@@ -219,8 +220,8 @@ describe("OAuth credential-entry cache — coherence", () => {
   });
 
 
-  it("leaves every read going to the store when the gate is off", () => {
-    saveAuthEntry("gated", { tokens: { accessToken: "a" } }, SERVER_URL);
+  it("leaves every read going to the store when the gate is off", async () => {
+    await saveAuthEntry("gated", { tokens: { accessToken: "a" } }, SERVER_URL);
     const before = getTestAuthSecretStoreReadCount();
 
     expect(getAuthEntry("gated")).toBeDefined();
@@ -229,9 +230,9 @@ describe("OAuth credential-entry cache — coherence", () => {
     expect(getTestAuthSecretStoreReadCount() - before).toBe(2);
   });
 
-  it("normalizes publication exactly as a later store reload does", () => {
+  it("normalizes publication exactly as a later store reload does", async () => {
     enableAuthEntryCache();
-    saveAuthEntry("normalized", {
+    await saveAuthEntry("normalized", {
       tokens: { accessToken: "a", unexpected: "discard" },
       unexpected: true,
     } as unknown as AuthEntry, SERVER_URL);
@@ -248,39 +249,42 @@ describe("OAuth credential-entry cache — coherence", () => {
 describe("OAuth credential-entry cache — invalidation", () => {
   useAuthCacheHarness();
 
-  function writeBehindTheCache(serverName: string, accessToken: string): void {
+  async function writeBehindTheCache(serverName: string, accessToken: string): Promise<void> {
     process.env[DISABLE_ENV] = "1";
-    saveAuthEntry(serverName, { tokens: { accessToken } }, SERVER_URL);
-    delete process.env[DISABLE_ENV];
+    try {
+      await saveAuthEntry(serverName, { tokens: { accessToken } }, SERVER_URL);
+    } finally {
+      delete process.env[DISABLE_ENV];
+    }
   }
 
-  it("reloads externally changed, absent, and chunked credentials", () => {
+  it("reloads externally changed, absent, and chunked credentials", async () => {
     enableAuthEntryCache();
-    saveAuthEntry("rotated", { tokens: { accessToken: "old" } }, SERVER_URL);
-    writeBehindTheCache("rotated", "new");
+    await saveAuthEntry("rotated", { tokens: { accessToken: "old" } }, SERVER_URL);
+    await writeBehindTheCache("rotated", "new");
     expect(getAuthEntry("rotated")?.tokens?.accessToken).toBe("old");
     invalidateAuthEntryCache("rotated");
     expect(getAuthEntry("rotated")?.tokens?.accessToken).toBe("new");
 
     expect(getAuthEntry("appearing")).toBeUndefined();
-    writeBehindTheCache("appearing", "created");
+    await writeBehindTheCache("appearing", "created");
     expect(getAuthEntry("appearing")).toBeUndefined();
     invalidateAuthEntryCache("appearing");
     expect(getAuthEntry("appearing")?.tokens?.accessToken).toBe("created");
 
     process.env[STORE_ENV] = "sizelimited";
     const token = "x".repeat(5000);
-    saveAuthEntry("chunked", { tokens: { accessToken: token } }, SERVER_URL);
+    await saveAuthEntry("chunked", { tokens: { accessToken: token } }, SERVER_URL);
     invalidateAuthEntryCache("chunked");
     const before = getTestAuthSecretStoreReadCount();
     expect(getAuthEntry("chunked")?.tokens?.accessToken).toBe(token);
     expect(getTestAuthSecretStoreReadCount() - before).toBeGreaterThan(1);
   });
 
-  it("only evicts its target and is harmless while disabled", () => {
+  it("only evicts its target and is harmless while disabled", async () => {
     enableAuthEntryCache();
-    saveAuthEntry("keep", { tokens: { accessToken: "k" } }, SERVER_URL);
-    saveAuthEntry("drop", { tokens: { accessToken: "d" } }, SERVER_URL);
+    await saveAuthEntry("keep", { tokens: { accessToken: "k" } }, SERVER_URL);
+    await saveAuthEntry("drop", { tokens: { accessToken: "d" } }, SERVER_URL);
     invalidateAuthEntryCache("drop");
     const before = getTestAuthSecretStoreReadCount();
     expect(getAuthEntry("keep")?.tokens?.accessToken).toBe("k");
@@ -294,13 +298,13 @@ describe("OAuth credential-entry cache — invalidation", () => {
   });
 
 
-  it("evicts a removed credential even when the gate is turned off", () => {
+  it("evicts a removed credential even when the gate is turned off", async () => {
     enableAuthEntryCache();
-    saveAuthEntry("toggled", { tokens: { accessToken: "t" } }, SERVER_URL);
+    await saveAuthEntry("toggled", { tokens: { accessToken: "t" } }, SERVER_URL);
     expect(getAuthEntry("toggled")).toBeDefined();
 
     process.env[DISABLE_ENV] = "1";
-    removeAuthEntry("toggled");
+    await removeAuthEntry("toggled");
     delete process.env[DISABLE_ENV];
 
     expect(getAuthEntry("toggled")).toBeUndefined();

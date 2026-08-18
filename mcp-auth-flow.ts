@@ -470,9 +470,9 @@ export async function startAuth(
     const storedAuth = await getAuthForUrl(serverName, serverUrl, authStorageOptions)
     authority()
     if (storedAuth?.clientInfo && !storedAuth.tokens && !config.clientId) {
-      await clearClientInfo(serverName, authStorageOptions)
-      await clearCodeVerifier(serverName, authStorageOptions)
-      await clearOAuthState(serverName, authStorageOptions)
+      await clearClientInfo(serverName, authStorageOptions, authority)
+      await clearCodeVerifier(serverName, authStorageOptions, authority)
+      await clearOAuthState(serverName, authStorageOptions, authority)
     }
 
     authority()
@@ -482,8 +482,9 @@ export async function startAuth(
       },
     }, authStorageOptions, runtime.signal, undefined, authority)
     try {
-      const fetchFn = createOAuthFetch(serverUrl, pluginAwareOAuthHeaders(definition), signal)
-      authProvider.setAuthFetch(fetchFn)
+      const getHeaders = pluginAwareOAuthHeaders(definition)
+      const fetchFn = createOAuthFetch(serverUrl, getHeaders, signal)
+      authProvider.setAuthFetch(fetchFn, createOAuthFetch(serverUrl, getHeaders))
       const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
       authority()
       throwIfAborted(signal)
@@ -532,8 +533,10 @@ export async function startAuth(
     } catch (error) {
       releaseCallbackServer(oauthState)
       try {
-        await cleanupAndReleaseCallbackServerIfIdle(() => {
-          if (hasOAuthAuthority(authority)) clearOAuthState(serverName, authStorageOptions)
+        await cleanupAndReleaseCallbackServerIfIdle(async () => {
+          if (hasOAuthAuthority(authority)) {
+            await clearOAuthState(serverName, authStorageOptions, authority)
+          }
         })
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "OAuth startup cleanup failed")
@@ -555,16 +558,19 @@ export async function startAuth(
     authority()
     if (storedAuth?.clientInfo && !config.clientId) {
       if (!storedAuth.tokens) {
-        await clearClientInfo(serverName, authStorageOptions)
-        await clearCodeVerifier(serverName, authStorageOptions)
-        await clearOAuthState(serverName, authStorageOptions)
+        await clearClientInfo(serverName, authStorageOptions, authority)
+        await clearCodeVerifier(serverName, authStorageOptions, authority)
+        await clearOAuthState(serverName, authStorageOptions, authority)
       } else {
         const redirectUris = storedAuth.clientInfo.redirectUris
-        if (!Array.isArray(redirectUris) || !redirectUris.includes(authProvider.redirectUrl ?? "")) {
-          await clearClientInfo(serverName, authStorageOptions)
-          await clearTokens(serverName, authStorageOptions)
-          await clearCodeVerifier(serverName, authStorageOptions)
-          await clearOAuthState(serverName, authStorageOptions)
+        const redirectUriMatches = Array.isArray(redirectUris)
+          && redirectUris.includes(authProvider.redirectUrl ?? "")
+        if (!redirectUriMatches && !storedAuth.tokens.refreshToken) {
+          // A stale redirect URI only blocks the interactive leg; refresh does
+          // not send redirect_uri, so keep refresh-capable credentials intact.
+          await clearClientInfo(serverName, authStorageOptions, authority)
+          await clearCodeVerifier(serverName, authStorageOptions, authority)
+          await clearOAuthState(serverName, authStorageOptions, authority)
         }
       }
     }
@@ -573,7 +579,7 @@ export async function startAuth(
 
     const getHeaders = pluginAwareOAuthHeaders(definition)
     const fetchFn = createOAuthFetch(serverUrl, getHeaders, signal)
-    authProvider.setAuthFetch(fetchFn)
+    authProvider.setAuthFetch(fetchFn, createOAuthFetch(serverUrl, getHeaders))
     const discovery = applyOAuthConfig(await probeAuthDiscovery(serverUrl, definition, signal), config)
     authority()
     throwIfAborted(signal)
@@ -582,7 +588,7 @@ export async function startAuth(
     if (result === "AUTHORIZED") {
       authProvider.deactivate()
       releaseCallbackServer(oauthState)
-      clearOAuthState(serverName, authStorageOptions)
+      await clearOAuthState(serverName, authStorageOptions, authority)
       await stopCallbackServerIfIdle()
       authority()
       return { authorizationUrl: "" }
@@ -669,7 +675,9 @@ async function clearPendingAuth(
     if (!pendingState) cancelPendingCallback(stateToRelease)
     if (pendingAuth && hasOAuthAuthority(pendingAuth.authority)) {
       const storedState = getOAuthState(serverName, authStorageOptions)
-      if (storedState === stateToRelease) clearOAuthState(serverName, authStorageOptions)
+      if (storedState === stateToRelease) {
+        await clearOAuthState(serverName, authStorageOptions, pendingAuth.authority)
+      }
     }
   }
 }
@@ -920,7 +928,10 @@ export async function completeAuth(
   let caughtError: unknown
   try {
     const fetchFn = createOAuthFetch(pendingAuth.serverUrl, pendingAuth.getHeaders, signal)
-    pendingAuth.authProvider.setAuthFetch(fetchFn)
+    pendingAuth.authProvider.setAuthFetch(
+      fetchFn,
+      createOAuthFetch(pendingAuth.serverUrl, pendingAuth.getHeaders),
+    )
     const discoveryState = await pendingAuth.authProvider.discoveryState()
     pendingAuth.authority()
     const metadata = discoveryState?.authorizationServerMetadata
@@ -1145,14 +1156,15 @@ export async function getValidToken(
 
     try {
       const config = options.definition ? extractOAuthConfig(options.definition) : {}
-      const fetchFn = createOAuthFetch(serverUrl, pluginAwareOAuthHeaders(options.definition), signal)
+      const getHeaders = pluginAwareOAuthHeaders(options.definition)
+      const fetchFn = createOAuthFetch(serverUrl, getHeaders, signal)
       authority()
       const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
         onRedirect: async () => {},
       }, authStorageOptions, runtime.signal, undefined, authority)
 
       try {
-        authProvider.setAuthFetch(fetchFn)
+        authProvider.setAuthFetch(fetchFn, createOAuthFetch(serverUrl, getHeaders))
         const clientInfo = await authProvider.clientInformation()
         authority()
         throwIfAborted(signal)

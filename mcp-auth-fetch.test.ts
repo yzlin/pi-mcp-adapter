@@ -252,7 +252,7 @@ describe("native SDK OAuth service headers", () => {
     assert.equal(new URL(authorizationUrl).origin, origin)
     await completeAuth("scoped", "synthetic-code", { runtime })
     const tokens = getAuthForUrl("scoped", serverUrl)!.tokens!
-    updateTokens("scoped", { ...tokens, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
+    await updateTokens("scoped", { ...tokens, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
     assert.equal((await getMcpOAuthTokensForUrl("scoped", serverUrl, { definition: config }))?.accessToken, "oauth-token")
     assert.equal(new URL(seen.find(request => request.url.endsWith("/register"))!.url).origin, origin)
     const grants = await Promise.all(seen.filter(request => request.url.endsWith("/token")).map(async request => new URLSearchParams(await request.text()).get("grant_type")))
@@ -327,7 +327,7 @@ describe("native SDK OAuth service headers", () => {
       clientId: "configured-client", redirectUri: "https://callback.example.test/callback",
       authServerMetadataUrl: metadataUrl,
     }
-    updateTokens("refresh-command-failure", {
+    await updateTokens("refresh-command-failure", {
       accessToken: "expired-token", refreshToken: "refresh-token", expiresAt: Date.now() / 1000 - 3600, issuer,
     }, serverUrl)
     let redirects = 0
@@ -377,7 +377,7 @@ describe("native SDK OAuth service headers", () => {
         const config = definition()
         if (!withHeaders) delete config.headers
         config.oauth = { ...config.oauth as object, clientId: "configured-client" }
-        updateTokens(name, {
+        await updateTokens(name, {
           accessToken: "expired-token", refreshToken: "refresh-token", expiresAt: Date.now() / 1000 - 3600, issuer: origin,
         }, serverUrl)
         const result = await startAuth(name, serverUrl, config, { runtime })
@@ -395,7 +395,7 @@ describe("native SDK OAuth service headers", () => {
     assert(!seen.some(request => request.url.includes("oauth-protected-resource")))
     assert.equal(seen.find(request => request.url.endsWith("/token"))?.headers.get("authorization"), `Basic ${Buffer.from("configured-client:configured-secret").toString("base64")}`)
     const tokens = getAuthForUrl("explicit", serverUrl)!.tokens!
-    updateTokens("explicit", { ...tokens, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
+    await updateTokens("explicit", { ...tokens, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
     assert.equal((await getMcpOAuthTokensForUrl("explicit", serverUrl, { definition: config }))?.accessToken, "oauth-token")
   })
 
@@ -418,7 +418,7 @@ describe("native SDK OAuth service headers", () => {
     delete config.headers
     await startAuth("ordinary", serverUrl, config, { runtime })
     await completeAuth("ordinary", "synthetic-code", { runtime })
-    updateTokens("ordinary", { ...getAuthForUrl("ordinary", serverUrl)!.tokens!, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
+    await updateTokens("ordinary", { ...getAuthForUrl("ordinary", serverUrl)!.tokens!, expiresAt: Date.now() / 1000 - 3600 }, serverUrl)
     assert.equal((await getMcpOAuthTokensForUrl("ordinary", serverUrl))?.accessToken, "oauth-token")
   })
 

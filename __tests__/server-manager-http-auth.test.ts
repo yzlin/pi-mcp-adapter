@@ -310,7 +310,7 @@ describe("McpServerManager HTTP bearer auth", () => {
 
   it("uses URL-bound stored OAuth tokens before implicit authentication is challenged", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    saveAuthEntry("stored", { tokens: { accessToken: "stored-token" } }, "https://example.test/mcp");
+    await saveAuthEntry("stored", { tokens: { accessToken: "stored-token" } }, "https://example.test/mcp");
 
     const manager = new McpServerManager();
     await manager.connect("stored", { url: "https://example.test/mcp" });
