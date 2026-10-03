@@ -61,8 +61,8 @@ describe("OAuth native keyring Entry reuse", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reuses a healthy Entry while re-reading externally changed backing values, including status reads", () => {
-    saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
+  it("reuses a healthy Entry while re-reading externally changed backing values, including status reads", async () => {
+    await saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
     const entry = constructed.at(-1)!;
     expect(entry.service).toBe("pi-mcp-adapter.oauth");
     const count = constructed.length;
@@ -73,8 +73,8 @@ describe("OAuth native keyring Entry reuse", () => {
     expect(constructed).toHaveLength(count);
   });
 
-  it("retries one stale cached read with a fresh Entry", () => {
-    saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
+  it("retries one stale cached read with a fresh Entry", async () => {
+    await saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
     const stale = constructed.at(-1)!;
     backing.set(stale.account, payload("new"));
     stale.failRead = true;
@@ -85,8 +85,8 @@ describe("OAuth native keyring Entry reuse", () => {
     expect(constructed).toHaveLength(count + 1);
   });
 
-  it("reports a fresh retry failure with the original auth error cause", () => {
-    saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
+  it("reports a fresh retry failure with the original auth error cause", async () => {
+    await saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
     freshFailureAfter = constructed.length;
     freshReadError = new Error("fresh failure");
     // The stale instance must throw a different error from its replacement.
@@ -111,23 +111,23 @@ describe("OAuth native keyring Entry reuse", () => {
     expect(constructed).toHaveLength(1);
   });
 
-  it("invalidates on writes and removes, without retaining the remove Entry", () => {
-    saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
+  it("invalidates on writes and removes, without retaining the remove Entry", async () => {
+    await saveAuthEntry("one", { tokens: { accessToken: "first" } }, url);
     const first = constructed.at(-1)!;
-    saveAuthEntry("one", { tokens: { accessToken: "second" } }, url);
+    await saveAuthEntry("one", { tokens: { accessToken: "second" } }, url);
     const second = constructed.at(-1)!;
     expect(second).not.toBe(first);
     const beforeRemove = constructed.length;
-    removeAuthEntry("one");
+    await removeAuthEntry("one");
     expect(constructed.length).toBeGreaterThan(beforeRemove);
     const afterRemove = constructed.length;
     expect(getAuthEntry("one")).toBeUndefined();
     expect(constructed.length).toBe(afterRemove + 1);
   });
 
-  it("separates accounts and clears native Entries on test reset", () => {
-    saveAuthEntry("one", { tokens: { accessToken: "one" } }, url);
-    saveAuthEntry("two", { tokens: { accessToken: "two" } }, url);
+  it("separates accounts and clears native Entries on test reset", async () => {
+    await saveAuthEntry("one", { tokens: { accessToken: "one" } }, url);
+    await saveAuthEntry("two", { tokens: { accessToken: "two" } }, url);
     expect(constructed[0]!.account).not.toBe(constructed.at(-1)!.account);
     const count = constructed.length;
     getAuthEntry("one");

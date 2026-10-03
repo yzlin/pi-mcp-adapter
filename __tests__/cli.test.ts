@@ -621,7 +621,7 @@ describe("cli doctor", () => {
     const env = { PI_MCP_ADAPTER_OAUTH_FILE_KEY: Buffer.alloc(32, 7).toString("base64") };
     const seeded = spawnSync(process.execPath, ["--input-type=module", "--eval", [
       `const { saveAuthEntry } = await import(${JSON.stringify(pathToFileURL(resolve("dist/mcp-auth.js")).href)});`,
-      `saveAuthEntry("explicit", { clientInfo: { clientId: "doctor" } }, ${JSON.stringify(url)}, { credentialStore: "encrypted-file" });`,
+      `await saveAuthEntry("explicit", { clientInfo: { clientId: "doctor" } }, ${JSON.stringify(url)}, { credentialStore: "encrypted-file" });`,
     ].join("\n")], { env: { ...process.env, HOME: context.home, PI_CODING_AGENT_DIR: context.agentDir, ...env }, encoding: "utf-8" });
     expect(seeded.status, seeded.stderr).toBe(0);
 

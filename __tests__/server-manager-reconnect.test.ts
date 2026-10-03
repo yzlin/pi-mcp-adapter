@@ -108,7 +108,7 @@ describe("McpServerManager.reconnect", () => {
 
   it("reconnects implicit OAuth servers with stored tokens", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    saveAuthEntry("stored", { tokens: { accessToken: "stored-token" } }, def.url);
+    await saveAuthEntry("stored", { tokens: { accessToken: "stored-token" } }, def.url);
     const manager = new McpServerManager();
 
     const stale = await manager.connect("stored", def);

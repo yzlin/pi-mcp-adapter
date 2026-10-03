@@ -319,12 +319,12 @@ describe("mcp-panel auth actions", () => {
       },
     };
     const callbacks = createCallbacks("needs-auth");
-    callbacks.importPiSignIns = vi.fn(() => ({ imported: ["github"], failed: [] }));
+    callbacks.importPiSignIns = vi.fn(async () => ({ imported: ["github"], failed: [] }));
     const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
     expect(stripAnsi(panel.render(160).join("\n"))).toContain("ctrl+p import sign-ins from Pi");
 
     panel.handleInput("\x10");
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(callbacks.importPiSignIns).toHaveBeenCalledTimes(1);
     expect(callbacks.reconnect).toHaveBeenCalledWith("github");
@@ -342,11 +342,11 @@ describe("mcp-panel auth actions", () => {
       },
     };
     const callbacks = createCallbacks("needs-auth");
-    callbacks.importPiSignIns = vi.fn(() => ({ imported: ["github"], failed: [{ server: "gitlab", error: "store unavailable" }] }));
+    callbacks.importPiSignIns = vi.fn(async () => ({ imported: ["github"], failed: [{ server: "gitlab", error: "store unavailable" }] }));
     const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {});
 
     panel.handleInput("\x10");
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(callbacks.reconnect).toHaveBeenCalledTimes(1);
     expect(callbacks.reconnect).toHaveBeenCalledWith("github");

@@ -142,7 +142,7 @@ describe("importing sign-ins from Pi's built-in MCP", () => {
   it("never replaces an existing adapter entry for the URL", async () => {
     writePiAuth({ "https://docs.example/mcp": piEntry("https://docs.example/mcp") });
     const { offerPiSignInImports, findPiSignInImports, getAuthForUrl, saveAuthEntry } = await loadModules();
-    saveAuthEntry("docs", { clientInfo: { clientId: "adapter-client" } }, "https://docs.example/mcp");
+    await saveAuthEntry("docs", { clientInfo: { clientId: "adapter-client" } }, "https://docs.example/mcp");
     const config: McpConfig = { mcpServers: { docs: { url: "https://docs.example/mcp", auth: "oauth" } } };
     const ctx = createCtx(IMPORT);
 
@@ -160,7 +160,7 @@ describe("importing sign-ins from Pi's built-in MCP", () => {
     const ctx = createCtx(IMPORT);
     ctx.ui.select.mockImplementation(async () => {
       // Another session signs in with /mcp-auth while this prompt waits.
-      saveAuthEntry("docs", { tokens: { accessToken: "adapter-access" } }, "https://docs.example/mcp");
+      await saveAuthEntry("docs", { tokens: { accessToken: "adapter-access" } }, "https://docs.example/mcp");
       return IMPORT;
     });
 
@@ -259,7 +259,7 @@ describe("importing sign-ins from Pi's built-in MCP", () => {
     } as any, { getFlag: () => undefined } as any, { hasUI: true, mode: "tui", cwd: root, ui } as any);
 
     const callbacks = createMcpPanel.mock.calls[0]![3];
-    expect(callbacks.importPiSignIns?.()).toEqual({ imported: ["docs"], failed: [] });
+    await expect(callbacks.importPiSignIns?.()).resolves.toEqual({ imported: ["docs"], failed: [] });
     expect(ui.select).not.toHaveBeenCalled();
     expect(getAuthForUrl("docs", "https://docs.example/mcp")?.tokens?.accessToken).toBe("pi-access");
     vi.doUnmock("../mcp-panel.ts");

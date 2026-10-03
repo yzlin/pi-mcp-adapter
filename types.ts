@@ -848,7 +848,7 @@ export interface McpPanelCallbacks {
   getFailureMessage?: (serverName: string) => string | null;
   refreshCacheAfterReconnect: (serverName: string) => ServerCacheEntry | null;
   /** Present when Pi's built-in MCP has sign-ins the adapter can import. */
-  importPiSignIns?: () => { imported: string[]; failed: { server: string; error: string }[] };
+  importPiSignIns?: () => Promise<{ imported: string[]; failed: { server: string; error: string }[] }>;
 }
 
 export interface McpPanelResult {

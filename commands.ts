@@ -804,12 +804,12 @@ export async function openMcpPanel(
   let configChanged = false;
   const authStorageOptions = state.authStorageOptions ?? {};
   if (findPiSignInImports(config, authStorageOptions).length > 0) {
-    callbacks.importPiSignIns = () => {
+    callbacks.importPiSignIns = async () => {
       const imported: string[] = [];
       const failed: { server: string; error: string }[] = [];
       for (const candidate of findPiSignInImports(config, authStorageOptions)) {
         try {
-          if (importPiSignIn(candidate, authStorageOptions)) imported.push(candidate.serverName);
+          if (await importPiSignIn(candidate, authStorageOptions)) imported.push(candidate.serverName);
         } catch (error) {
           failed.push({ server: candidate.serverName, error: error instanceof Error ? error.message : String(error) });
         }
