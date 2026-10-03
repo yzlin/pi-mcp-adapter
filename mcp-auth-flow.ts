@@ -969,6 +969,7 @@ export async function completeAuth(
       ...pendingAuth.discovery,
       fetchFn: pendingAuth.authProvider.createAuthFetchFn(),
     })), signal)
+    pendingAuth.authority()
     throwIfAborted(signal)
     if (result !== "AUTHORIZED") {
       throw new UnauthorizedError("Failed to authorize")
@@ -1146,10 +1147,8 @@ export async function getValidToken(
   const authStorageOptions = options.authStorageOptions ?? {}
   const signal = combineAbortSignals(runtime.signal, options.signal)
   throwIfAborted(signal)
-  await migrateLegacyAuthEntry(serverName, authStorageOptions)
-  throwIfAborted(signal)
   // Check if we have valid tokens
-  const entry = await getAuthForUrl(serverName, serverUrl, authStorageOptions)
+  const entry = getAuthForUrl(serverName, serverUrl, authStorageOptions)
   if (!hasOAuthAuthority(authority)) return null
   throwIfAborted(signal)
   if (!entry?.tokens) {
@@ -1168,6 +1167,9 @@ export async function getValidToken(
     console.log(`MCP Auth: Token expired for ${serverName}, attempting refresh`)
 
     try {
+      await migrateLegacyAuthEntry(serverName, authStorageOptions)
+      authority()
+      throwIfAborted(signal)
       const config = options.definition ? extractOAuthConfig(options.definition) : {}
       const getHeaders = pluginAwareOAuthHeaders(options.definition)
       const fetchFn = createOAuthFetch(serverUrl, getHeaders, signal)
@@ -1195,6 +1197,7 @@ export async function getValidToken(
           fetchFn: authProvider.createAuthFetchFn(),
           ...(options.skipIssuerMetadataValidation === true ? { skipIssuerMetadataValidation: true } : {}),
         })), signal)
+        authority()
         throwIfAborted(signal)
         if (result !== "AUTHORIZED") {
           return null

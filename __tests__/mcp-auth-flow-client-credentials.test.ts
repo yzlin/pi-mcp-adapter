@@ -1480,6 +1480,32 @@ describe("mcp-auth-flow explicit auth", () => {
     expect(mocks.stopCallbackServer).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a code exchange that finishes after logout", async () => {
+    mocks.sdkAuth.mockImplementationOnce(async (provider) => {
+      await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
+      return "REDIRECT";
+    });
+    let release!: () => void;
+    let markStarted!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    mocks.sdkAuth.mockImplementationOnce(async () => {
+      markStarted();
+      await gate;
+      return "AUTHORIZED";
+    });
+    const { completeAuth, removeAuth, startAuth } = await import("../mcp-auth-flow.ts");
+    const serverUrl = "https://api.example.com/mcp";
+
+    await startAuth("late-code", serverUrl, { url: serverUrl, auth: "oauth" });
+    const pending = completeAuth("late-code", "auth-code");
+    await started;
+    await removeAuth("late-code");
+    release();
+
+    await expect(pending).rejects.toThrow("OAuth flow is no longer active");
+  });
+
   it("releases reserved callback state after direct completeAuth", async () => {
     const resourceMetadataUrl = "https://api.example.com/.well-known/oauth-protected-resource";
     mocks.fetch.mockResolvedValueOnce(new Response(null, {
